@@ -2,11 +2,18 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/valyala/fasthttp"
-	netUrl "net/url"
 	"strings"
 	"time"
+
+	"github.com/valyala/fasthttp"
+	netUrl "net/url"
+)
+
+var (
+	ErrRiskControl = errors.New("412风控")
+	ErrRateLimit   = errors.New("429请求过多")
 )
 
 func (bc *BiliClient) getCookieValue(name string) string {
@@ -34,12 +41,14 @@ func NewBiliClient(cookies []Cookies, worker *Worker) *BiliClient {
 
 func (bc *BiliClient) setHeaders(req *fasthttp.Request) {
 	h := &req.Header
-	h.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	h.Set("User-Agent", defaultUserAgent)
 	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json, text/plain, */*")
+	h.Set("Origin", "https://show.bilibili.com")
 	h.Set("Referer", "https://show.bilibili.com/")
 	var cookieStr string
 	for _, c := range bc.cookies {
-		if c.Domain == ".bilibili.com" {
+		if c.Domain == ".bilibili.com" || strings.HasSuffix(c.Domain, "bilibili.com") || c.Domain == "" {
 			cookieStr += c.Name + "=" + c.Value + "; "
 		}
 	}
@@ -61,11 +70,10 @@ func (bc *BiliClient) Get(url string) ([]byte, error) {
 	if err := bc.client.Do(req, resp); err != nil {
 		return nil, err
 	}
-	err := bc.handleHTTPStatus(resp)
-	if err != nil {
+	if err := bc.handleHTTPStatus(resp); err != nil {
 		return nil, err
 	}
-	return resp.Body(), nil
+	return append([]byte(nil), resp.Body()...), nil
 }
 
 func (bc *BiliClient) Post(url string, data interface{}) ([]byte, error) {
@@ -75,7 +83,7 @@ func (bc *BiliClient) Post(url string, data interface{}) ([]byte, error) {
 	defer fasthttp.ReleaseResponse(resp)
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return resp.Body(), err
+		return nil, err
 	}
 	req.Header.SetMethod("POST")
 	req.SetRequestURI(url)
@@ -85,12 +93,12 @@ func (bc *BiliClient) Post(url string, data interface{}) ([]byte, error) {
 	if err := bc.client.Do(req, resp); err != nil {
 		return nil, err
 	}
-	err = bc.handleHTTPStatus(resp)
-	if err != nil {
+	if err := bc.handleHTTPStatus(resp); err != nil {
 		return nil, err
 	}
-	return resp.Body(), nil
+	return append([]byte(nil), resp.Body()...), nil
 }
+
 func (bc *BiliClient) DoFormRequest(url string, data map[string]string) ([]byte, error) {
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
@@ -105,16 +113,13 @@ func (bc *BiliClient) DoFormRequest(url string, data map[string]string) ([]byte,
 		form.Set(k, v)
 	}
 	req.SetBodyString(form.Encode())
-	client := &fasthttp.Client{}
-	err := client.Do(req, resp)
-	if err != nil {
+	if err := bc.client.Do(req, resp); err != nil {
 		return nil, err
 	}
-	err = bc.handleHTTPStatus(resp)
-	if err != nil {
+	if err := bc.handleHTTPStatus(resp); err != nil {
 		return nil, err
 	}
-	return resp.Body(), nil
+	return append([]byte(nil), resp.Body()...), nil
 }
 
 func (bc *BiliClient) handleHTTPStatus(resp *fasthttp.Response) error {
@@ -123,13 +128,19 @@ func (bc *BiliClient) handleHTTPStatus(resp *fasthttp.Response) error {
 	case fasthttp.StatusOK:
 		return nil
 	case fasthttp.StatusPreconditionFailed:
-		if bc.worker.cancel != nil {
-			bc.worker.cancel() //取消
+		log.Warn("HTTP 412 风控，取消当前 worker 任务")
+		if bc.worker != nil && bc.worker.cancel != nil {
+			bc.worker.cancel()
 		}
-		return fmt.Errorf("412风控")
+		return ErrRiskControl
 	case fasthttp.StatusTooManyRequests:
-		return fmt.Errorf("429请求过多")
+		return ErrRateLimit
 	default:
-		return fmt.Errorf("HTTP %d: %s", status, resp.Body())
+		body := resp.Body()
+		preview := string(body)
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return fmt.Errorf("HTTP %d: %s", status, preview)
 	}
 }

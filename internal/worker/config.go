@@ -41,10 +41,10 @@ func LoadConfig() *Config {
 		cfg.TimeStart = &TimeStart
 	}
 	if cfg.Interval <= 0 {
-		log.Println("⚠️ TICKET_INTERVAL 格式错误（非正数），使用默认值 300")
+		log.Println("⚠️ TICKET_INTERVAL 格式错误（非正数），使用默认值 300 毫秒")
 		cfg.Interval = 300
 	} else {
-		log.Printf("ℹ️ 抢票重试间隔: %d 秒", cfg.Interval)
+		log.Printf("ℹ️ 抢票重试间隔: %d 毫秒", cfg.Interval)
 	}
 	return cfg
 }
