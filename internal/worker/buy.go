@@ -35,8 +35,9 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 	for {
 		select {
 		case <-ctx.Done():
-			if err := w.m.CancelTask(Risking); err != nil {
-				return err
+			// 412 会先 cancel ctx；统一由 RunTask 走 enterRisking，避免与 defer 竞态
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return fmt.Errorf("任务被取消: %w", ErrRiskControl)
 			}
 			return fmt.Errorf("任务被取消: %w", ctx.Err())
 		default:
@@ -55,11 +56,10 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 			if errors.Is(err, ErrRateLimit) {
 				log.Warnf("准备订单触发 429，延迟 %dms 后重试", defaultRateLimitMs)
 				time.Sleep(time.Duration(defaultRateLimitMs) * time.Millisecond)
-			} else if errors.Is(err, ErrRiskControl) {
-				return fmt.Errorf("任务被取消: %w", err)
-			} else {
-				log.Errorf("准备订单请求失败: %v", err)
+			} else 			if errors.Is(err, ErrRiskControl) {
+				return err
 			}
+			log.Errorf("准备订单请求失败: %v", err)
 			continue
 		}
 		var requestResult map[string]interface{}
@@ -93,8 +93,8 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 		for attempt := 1; attempt <= defaultCreateRetry; attempt++ {
 			select {
 			case <-ctx.Done():
-				if err := w.m.CancelTask(Risking); err != nil {
-					return err
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return fmt.Errorf("任务被取消: %w", ErrRiskControl)
 				}
 				return fmt.Errorf("任务被取消: %w", ctx.Err())
 			default:
@@ -120,7 +120,7 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 					continue
 				}
 				if errors.Is(err, ErrRiskControl) {
-					return fmt.Errorf("任务被取消: %w", err)
+					return err
 				}
 				log.Errorf("[尝试 %d/%d] 请求异常: %v", attempt, defaultCreateRetry, err)
 				time.Sleep(time.Duration(interval) * time.Millisecond)

@@ -98,21 +98,39 @@ func (s *Server) CancelTask(ctx context.Context, req *masterpb.CancelTaskInfo) (
 	s.tasksMux.Lock()
 	defer s.workersMux.Unlock()
 	defer s.tasksMux.Unlock()
-	cancelTask, exists := s.tasks[req.CancelTaskId]
-	if !exists {
-		return nil, fmt.Errorf("<%s> not found", req.CancelTaskId)
-	}
-	if cancelTask.AssignedTo != req.WorkerId {
-		return nil, fmt.Errorf("<%s> not own by <%s>", req.CancelTaskId, req.WorkerId)
-	}
+
 	ownWorkerId := req.WorkerId
-	s.workers[ownWorkerId].TaskAssigned = ""
-	if s.workers[ownWorkerId].Status != Risking && WorkerStatus(req.WorkStatus) == Risking {
-		log.Printf("Worker %s 出现风控，标记为Risking", ownWorkerId)
-		s.workers[ownWorkerId].BanTime = time.Now() //设置风控时间
+	worker, workerExists := s.workers[ownWorkerId]
+	if !workerExists {
+		return nil, fmt.Errorf("worker <%s> not found", ownWorkerId)
 	}
-	s.workers[ownWorkerId].Status = WorkerStatus(req.WorkStatus)
-	s.workers[ownWorkerId].UpdateTime = time.Now()
+
+	// 任务回 Pending，交给其他 Idle worker；允许 taskId 为空（已取消过）
+	if req.CancelTaskId != "" {
+		cancelTask, exists := s.tasks[req.CancelTaskId]
+		if !exists {
+			return nil, fmt.Errorf("<%s> not found", req.CancelTaskId)
+		}
+		if cancelTask.AssignedTo != "" && cancelTask.AssignedTo != req.WorkerId {
+			return nil, fmt.Errorf("<%s> not own by <%s>", req.CancelTaskId, req.WorkerId)
+		}
+		if cancelTask.AssignedTo == req.WorkerId || cancelTask.Status == TaskStatusDoing {
+			log.Printf("[Reassign] cancel task %s from %s -> PENDING", req.CancelTaskId, ownWorkerId)
+			s.clearAndPendingTask(cancelTask)
+		}
+	}
+
+	worker.TaskAssigned = ""
+	newStatus := WorkerStatus(req.WorkStatus)
+	if newStatus == Risking {
+		if worker.Status != Risking {
+			log.Printf("Worker %s 出现风控，标记为Risking，冷却 %.0fs", ownWorkerId, s.banTimeout.Seconds())
+		}
+		worker.BanTime = time.Now()
+	}
+	worker.Status = newStatus
+	worker.UpdateTime = time.Now()
+	s.triggerSchedule()
 
 	return &masterpb.CancelReply{
 		Success: true,
@@ -129,26 +147,48 @@ func (s *Server) RegisterWorker(ctx context.Context, req *masterpb.WorkerInfo) (
 	existingWorker, exists := s.workers[req.WorkerId]
 	if exists {
 		existingWorker.Address = req.Address
-		if existingWorker.Status != WorkerStatus(req.WorkStatus) {
-			existingWorker.Status = WorkerStatus(req.WorkStatus)
-			s.triggerSchedule() //触发调度
-		}
-		existingWorker.TaskAssigned = req.TaskAssigned
 		existingWorker.UpdateTime = time.Now()
+		reported := WorkerStatus(req.WorkStatus)
 
-		if req.TaskAssigned != "" {
-			task, exists := s.tasks[req.TaskAssigned]
-			if !exists {
+		// 冷却期内禁止心跳把 Risking 刷成 Idle/Working
+		if existingWorker.Status == Risking && reported != Risking {
+			if !existingWorker.BanTime.IsZero() && time.Since(existingWorker.BanTime) < s.banTimeout {
+				reported = Risking
+			}
+		}
+		if existingWorker.Status != reported {
+			if reported == Risking && existingWorker.Status != Risking {
+				existingWorker.BanTime = time.Now()
+				log.Printf("Worker %s 心跳上报风控，标记为Risking", req.WorkerId)
+			}
+			existingWorker.Status = reported
+			s.triggerSchedule()
+		}
+		if reported == Risking {
+			existingWorker.TaskAssigned = ""
+		} else {
+			existingWorker.TaskAssigned = req.TaskAssigned
+		}
+
+		// 仅在任务仍归属本 worker 且状态为 Doing 时接受状态推进，避免 412 后把 Pending 标成 Done
+		if req.TaskAssigned != "" && reported != Risking {
+			task, taskExists := s.tasks[req.TaskAssigned]
+			if !taskExists {
 				return nil, fmt.Errorf("<%s> not found", req.TaskAssigned)
 			}
-			if string(task.Status) != req.TaskStatus {
-				//task信息发生变化
-				oldStatus := task.Status
-				task.Status = TaskStatus(req.TaskStatus)
-				log.Printf("<%s> => <%s>: %s ", oldStatus, task.Status, task.TaskName)
-				s.triggerSchedule() //触发调度
+			if task.AssignedTo == req.WorkerId {
+				if string(task.Status) != req.TaskStatus {
+					oldStatus := task.Status
+					task.Status = TaskStatus(req.TaskStatus)
+					log.Printf("<%s> => <%s>: %s ", oldStatus, task.Status, task.TaskName)
+					if task.Status == TaskStatusDone {
+						task.AssignedTo = ""
+						existingWorker.TaskAssigned = ""
+					}
+					s.triggerSchedule()
+				}
+				task.UpdatedAt = time.Now()
 			}
-			task.UpdatedAt = time.Now() //心跳信息
 		}
 		return &masterpb.RegisterReply{
 			Success: true,
@@ -220,6 +260,7 @@ func (s *Server) checkWorkerHeartbeats() {
 	workingWorkers := make([]string, 0)
 	ideWorkers := make([]string, 0)
 
+	needSchedule := false
 	for workerID, worker := range s.workers {
 		if now.Sub(worker.UpdateTime) > s.heartbeatTimeout {
 			log.Printf("[Offline] %s timeout (%.0fs), marked as DOWN", workerID, s.heartbeatTimeout.Seconds())
@@ -228,16 +269,23 @@ func (s *Server) checkWorkerHeartbeats() {
 			if worker.TaskAssigned != "" {
 				log.Printf("[Reassign] %s task %s -> PENDING", workerID, worker.TaskAssigned)
 				s.tasksMux.Lock()
-				s.clearAndPendingTask(s.tasks[worker.TaskAssigned]) //重新分配
+				if task, ok := s.tasks[worker.TaskAssigned]; ok {
+					s.clearAndPendingTask(task)
+				}
 				s.tasksMux.Unlock()
-				s.triggerSchedule() //离线触发调度
+				needSchedule = true
 			}
-		} else if now.Sub(worker.BanTime) > s.banTimeout && worker.Status == Risking {
-			log.Printf("[Unban] %s rest time (%.0fs) ended, marked as IDLE", workerID, s.banTimeout.Seconds())
-			worker.Status = Idle
-			ideWorkers = append(ideWorkers, workerID)
 		} else if worker.Status == Risking {
-			offlineWorkers = append(offlineWorkers, workerID)
+			// 冷却结束 → Idle；冷却中保留节点，禁止接新任务
+			if !worker.BanTime.IsZero() && now.Sub(worker.BanTime) > s.banTimeout {
+				log.Printf("[Unban] %s rest time (%.0fs) ended, marked as IDLE", workerID, s.banTimeout.Seconds())
+				worker.Status = Idle
+				worker.BanTime = time.Time{}
+				ideWorkers = append(ideWorkers, workerID)
+				needSchedule = true
+			} else {
+				riskingWorkers = append(riskingWorkers, workerID)
+			}
 		} else if worker.Status == Working {
 			workingWorkers = append(workingWorkers, workerID)
 		} else if worker.Status == Idle {
@@ -245,9 +293,11 @@ func (s *Server) checkWorkerHeartbeats() {
 		}
 	}
 	log.Printf("[Worker] Banned: %d, Idle: %d, Working: %d", len(riskingWorkers), len(ideWorkers), len(workingWorkers))
-	// 清理离线worker
 	for _, workerID := range offlineWorkers {
 		delete(s.workers, workerID)
+	}
+	if needSchedule {
+		s.triggerSchedule()
 	}
 }
 func (s *Server) triggerSchedule() {

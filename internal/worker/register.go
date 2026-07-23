@@ -82,6 +82,12 @@ func (wm *Register) StartHeartbeat(interval time.Duration) {
 }
 
 func (wm *Register) sendHeartbeat() error {
+	wm.mu.Lock()
+	ws := wm.ws
+	ts := wm.ts
+	taskAssigned := wm.TaskAssigned
+	wm.mu.Unlock()
+
 	conn, err := grpc.Dial(wm.masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
@@ -92,9 +98,9 @@ func (wm *Register) sendHeartbeat() error {
 	req := &masterpb.WorkerInfo{
 		WorkerId:     wm.workerID,
 		Address:      wm.address,
-		WorkStatus:   int32(wm.GetStatus()),
-		TaskStatus:   string(wm.ts),
-		TaskAssigned: wm.TaskAssigned,
+		WorkStatus:   int32(ws),
+		TaskStatus:   string(ts),
+		TaskAssigned: taskAssigned,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -106,6 +112,10 @@ func (wm *Register) sendHeartbeat() error {
 	return err
 }
 func (wm *Register) CancelTask(s WorkerStatus) error {
+	wm.mu.Lock()
+	taskID := wm.TaskAssigned
+	wm.mu.Unlock()
+
 	conn, err := grpc.Dial(wm.masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
@@ -115,16 +125,19 @@ func (wm *Register) CancelTask(s WorkerStatus) error {
 	client := masterpb.NewTicketMasterClient(conn)
 	req := &masterpb.CancelTaskInfo{
 		WorkerId:     wm.workerID,
-		CancelTaskId: wm.TaskAssigned,
+		CancelTaskId: taskID,
 		WorkStatus:   int32(s),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err = client.CancelTask(ctx, req)
 	if err != nil {
-		log.Errorf("%v", err)
+		log.Errorf("CancelTask failed: %v", err)
+		return err
 	}
-	return err
+	// 本地立刻对齐，避免后续心跳用旧 TaskAssigned 把任务标 Done
+	wm.SetStatus(s, TaskStatusPending, "")
+	return nil
 }
 
 // UpdateWorkerStatusAndTaskStatus 更新 ws和ts，同时触发task的updateTime
