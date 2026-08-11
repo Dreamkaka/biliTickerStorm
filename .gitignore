@@ -489,4 +489,6 @@ cython_debug/
 #.idea/
 
 data/*.json
+data/accounts/
+.gocache/
 python/models

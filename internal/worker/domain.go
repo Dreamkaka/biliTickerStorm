@@ -11,27 +11,47 @@ const (
 	requestSource      = "neul-next"
 	defaultCreateRetry = 60
 	defaultRateLimitMs = 300
-	defaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	// defaultUserAgent 仅作测试/回退；线上请求使用 BrowserFingerprint
+	defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	errnoDuplicateBuy  = 100003
+	errnoStockEmpty    = 100001
+	errnoPayMoney      = 100034
+	errnoCaptcha       = 100044
+	errnoPendingOrder  = 100048
+	errnoTokenExpired  = 100051
+	errnoDupOrder      = 100079
 )
 
+func projectDetailURL(projectID int) string {
+	return fmt.Sprintf("%s/api/ticket/project/getV2?id=%d", baseURL, projectID)
+}
+
+func mobileDetailHref(projectID int) string {
+	return fmt.Sprintf("https://mall.bilibili.com/neul-next/ticket-renovation/detail.html?id=%d", projectID)
+}
+
 type BiliTickerBuyConfig struct {
-	Username    string      `json:"username"`
-	Detail      string      `json:"detail"`
-	Count       int         `json:"count"`
-	ScreenId    int         `json:"screen_id"`
-	ProjectId   int         `json:"project_id"`
-	SkuId       int         `json:"sku_id"`
-	OrderType   int         `json:"order_type"`
-	PayMoney    int         `json:"pay_money"`
-	BuyerInfo   []BuyerInfo `json:"buyer_info"`
-	Buyer       string      `json:"buyer"`
-	Tel         string      `json:"tel"`
-	DeliverInfo DeliverInfo `json:"deliver_info"`
-	Cookies     []Cookies   `json:"cookies"`
-	Phone       string      `json:"phone"`
-	Token       string      `json:"token"`
-	Again       int         `json:"again"`
-	Timestamp   int64       `json:"timestamp"`
+	Username     string      `json:"username"`
+	Detail       string      `json:"detail"`
+	Count        int         `json:"count"`
+	ScreenId     int         `json:"screen_id"`
+	ProjectId    int         `json:"project_id"`
+	SkuId        int         `json:"sku_id"`
+	OrderType    int         `json:"order_type"`
+	PayMoney     int         `json:"pay_money"`
+	BuyerInfo    []BuyerInfo `json:"buyer_info"`
+	Buyer        string      `json:"buyer"`
+	Tel          string      `json:"tel"`
+	DeliverInfo  DeliverInfo `json:"deliver_info"`
+	Cookies      []Cookies   `json:"cookies"`
+	Phone        string      `json:"phone"`
+	IsHotProject bool        `json:"is_hot_project"`
+	// SaleStart 可能是字符串或 unix 数字；用 FlexibleTimeString 兼容 Buy 导出
+	SaleStart FlexibleTimeString `json:"sale_start"`
+	LinkId    interface{}        `json:"link_id,omitempty"`
+	Token        string      `json:"token"`
+	Again        int         `json:"again"`
+	Timestamp    int64       `json:"timestamp"`
 }
 type Cookies struct {
 	Name     string  `json:"name"`

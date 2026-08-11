@@ -8,6 +8,8 @@ var Cfg = LoadConfig()
 
 type Config struct {
 	Configpath string `env:"CONFIG_PATH"`
+	WebAddr    string `env:"WEB_ADDR" envDefault:":8080"`
+	WebToken   string `env:"WEB_TOKEN" envDefault:""`
 }
 
 func LoadConfig() *Config {

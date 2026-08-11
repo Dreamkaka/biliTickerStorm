@@ -19,9 +19,33 @@ spec:
               value: {{ .Values.ticketWorker.masterServerAddr | quote }}
             - name: PUSHPLUS_TOKEN
               value: {{ .Values.ticketWorker.pushplusToken | quote }}
+            - name: BARK_TOKEN
+              value: {{ .Values.ticketWorker.barkToken | quote }}
+            - name: SERVERCHAN_KEY
+              value: {{ .Values.ticketWorker.serverchanKey | quote }}
+            - name: SERVERCHAN3_API_URL
+              value: {{ .Values.ticketWorker.serverchan3ApiUrl | quote }}
+            - name: TELEGRAM_BOT_TOKEN
+              value: {{ .Values.ticketWorker.telegramBotToken | quote }}
+            - name: TELEGRAM_CHAT_ID
+              value: {{ .Values.ticketWorker.telegramChatId | quote }}
+            - name: TELEGRAM_HTTP_PROXY
+              value: {{ .Values.ticketWorker.telegramHttpProxy | quote }}
             - name: TICKET_INTERVAL
               value: {{ .Values.ticketWorker.ticketInterval | quote }}
-            - name: GT_BASE_URL
-              value: {{ .Values.ticketWorker.gtBaseUrl | quote }}
+            - name: RATE_LIMIT_DELAY_MS
+              value: {{ .Values.ticketWorker.rateLimitDelayMs | default "300" | quote }}
+            - name: RISK_LOCAL_RETRIES
+              value: {{ .Values.ticketWorker.riskLocalRetries | default "5" | quote }}
+            - name: PROXY_LIST
+              value: {{ .Values.ticketWorker.proxyList | quote }}
+            - name: PROXY_API_URL
+              value: {{ .Values.ticketWorker.proxyApiUrl | quote }}
+            - name: CONN_PER_HOST
+              value: {{ .Values.ticketWorker.connPerHost | default "4" | quote }}
+            - name: CREATE_BATCH_SIZE
+              value: {{ .Values.ticketWorker.createBatchSize | default "2" | quote }}
+            - name: ENABLE_WARMUP
+              value: {{ .Values.ticketWorker.enableWarmup | default "true" | quote }}
             - name: TICKET_TIME_START
               value: {{ .Values.ticketWorker.ticketTimeStart | quote }}

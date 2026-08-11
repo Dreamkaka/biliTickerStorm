@@ -22,12 +22,15 @@ const (
 )
 
 type WorkerInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
-	WorkStatus    int32                  `protobuf:"varint,3,opt,name=workStatus,proto3" json:"workStatus,omitempty"`    // "Idle", "Working", "Risking"
-	TaskAssigned  string                 `protobuf:"bytes,4,opt,name=TaskAssigned,proto3" json:"TaskAssigned,omitempty"` //Task id
-	TaskStatus    string                 `protobuf:"bytes,5,opt,name=taskStatus,proto3" json:"taskStatus,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId     string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	Address      string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	WorkStatus   int32                  `protobuf:"varint,3,opt,name=workStatus,proto3" json:"workStatus,omitempty"`    // "Idle", "Working", "Risking"
+	TaskAssigned string                 `protobuf:"bytes,4,opt,name=TaskAssigned,proto3" json:"TaskAssigned,omitempty"` //Task id
+	TaskStatus   string                 `protobuf:"bytes,5,opt,name=taskStatus,proto3" json:"taskStatus,omitempty"`
+	// 可选：风控原因 / 当前代理（旧 worker 不填）
+	StatusDetail  string `protobuf:"bytes,6,opt,name=status_detail,json=statusDetail,proto3" json:"status_detail,omitempty"`
+	ProxyLabel    string `protobuf:"bytes,7,opt,name=proxy_label,json=proxyLabel,proto3" json:"proxy_label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -97,12 +100,29 @@ func (x *WorkerInfo) GetTaskStatus() string {
 	return ""
 }
 
+func (x *WorkerInfo) GetStatusDetail() string {
+	if x != nil {
+		return x.StatusDetail
+	}
+	return ""
+}
+
+func (x *WorkerInfo) GetProxyLabel() string {
+	if x != nil {
+		return x.ProxyLabel
+	}
+	return ""
+}
+
 type RegisterReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// worker 运行参数 JSON（workercfg.Settings）；空表示不下发
+	WorkerConfigJson string `protobuf:"bytes,3,opt,name=worker_config_json,json=workerConfigJson,proto3" json:"worker_config_json,omitempty"`
+	ConfigVersion    int64  `protobuf:"varint,4,opt,name=config_version,json=configVersion,proto3" json:"config_version,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RegisterReply) Reset() {
@@ -149,11 +169,27 @@ func (x *RegisterReply) GetMessage() string {
 	return ""
 }
 
+func (x *RegisterReply) GetWorkerConfigJson() string {
+	if x != nil {
+		return x.WorkerConfigJson
+	}
+	return ""
+}
+
+func (x *RegisterReply) GetConfigVersion() int64 {
+	if x != nil {
+		return x.ConfigVersion
+	}
+	return 0
+}
+
 type CancelTaskInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CancelTaskId  string                 `protobuf:"bytes,1,opt,name=cancelTaskId,proto3" json:"cancelTaskId,omitempty"` //
 	WorkerId      string                 `protobuf:"bytes,2,opt,name=workerId,proto3" json:"workerId,omitempty"`
 	WorkStatus    int32                  `protobuf:"varint,3,opt,name=workStatus,proto3" json:"workStatus,omitempty"`
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	ProxyLabel    string                 `protobuf:"bytes,5,opt,name=proxy_label,json=proxyLabel,proto3" json:"proxy_label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -207,6 +243,20 @@ func (x *CancelTaskInfo) GetWorkStatus() int32 {
 		return x.WorkStatus
 	}
 	return 0
+}
+
+func (x *CancelTaskInfo) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CancelTaskInfo) GetProxyLabel() string {
+	if x != nil {
+		return x.ProxyLabel
+	}
+	return ""
 }
 
 type CancelReply struct {
@@ -265,7 +315,7 @@ var File_proto_master_proto protoreflect.FileDescriptor
 
 const file_proto_master_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/master.proto\x12\x06worker\"\xa7\x01\n" +
+	"\x12proto/master.proto\x12\x06worker\"\xed\x01\n" +
 	"\n" +
 	"WorkerInfo\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x18\n" +
@@ -276,16 +326,24 @@ const file_proto_master_proto_rawDesc = "" +
 	"\fTaskAssigned\x18\x04 \x01(\tR\fTaskAssigned\x12\x1e\n" +
 	"\n" +
 	"taskStatus\x18\x05 \x01(\tR\n" +
-	"taskStatus\"C\n" +
+	"taskStatus\x12#\n" +
+	"\rstatus_detail\x18\x06 \x01(\tR\fstatusDetail\x12\x1f\n" +
+	"\vproxy_label\x18\a \x01(\tR\n" +
+	"proxyLabel\"\x98\x01\n" +
 	"\rRegisterReply\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"p\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12,\n" +
+	"\x12worker_config_json\x18\x03 \x01(\tR\x10workerConfigJson\x12%\n" +
+	"\x0econfig_version\x18\x04 \x01(\x03R\rconfigVersion\"\xa9\x01\n" +
 	"\x0eCancelTaskInfo\x12\"\n" +
 	"\fcancelTaskId\x18\x01 \x01(\tR\fcancelTaskId\x12\x1a\n" +
 	"\bworkerId\x18\x02 \x01(\tR\bworkerId\x12\x1e\n" +
 	"\n" +
 	"workStatus\x18\x03 \x01(\x05R\n" +
-	"workStatus\"A\n" +
+	"workStatus\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1f\n" +
+	"\vproxy_label\x18\x05 \x01(\tR\n" +
+	"proxyLabel\"A\n" +
 	"\vCancelReply\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage2\x86\x01\n" +

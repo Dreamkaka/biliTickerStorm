@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BiliTickerStorm</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">BiliTickerStorm · <span id="hdr-version">—</span></div>
+        <h1>B站会员购抢票集群</h1>
+        <p class="sub">Master 调度 · Worker 执行 · 配置与看板一体化</p>
+      </div>
+      <div class="hero-actions">
+        <span id="auth-pill" class="pill">鉴权: 检测中</span>
+        <label class="token-box">WEB_TOKEN <input id="token" type="password" placeholder="可选 Bearer" autocomplete="off" /></label>
+        <button id="btn-refresh" class="btn">刷新</button>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="cluster" class="active">集群看板</button>
+      <button data-tab="login">账号登录</button>
+      <button data-tab="config">生成配置</button>
+      <button data-tab="tasks">操作任务</button>
+      <button data-tab="settings">高级设置</button>
+      <button data-tab="update">版本更新</button>
+      <button data-tab="events">事件日志</button>
+      <button data-tab="guide">说明</button>
+    </nav>
+
+    <main>
+      <section id="tab-cluster" class="tab active">
+        <div class="cards" id="overview-cards"></div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3>Workers</h3></div>
+            <div class="table-wrap"><table id="workers-table"><thead>
+              <tr><th>ID</th><th>地址</th><th>状态</th><th>原因</th><th>代理</th><th>任务</th><th>心跳</th><th>冷却</th></tr>
+            </thead><tbody></tbody></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Tasks</h3></div>
+            <div class="table-wrap"><table id="tasks-mini"><thead>
+              <tr><th>名称</th><th>状态</th><th>Worker</th><th>重试</th></tr>
+            </thead><tbody></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-login" class="tab">
+        <div class="card">
+          <div class="card-head"><h3>扫码登录</h3><p>cookie 保存在 master 的 <code>CONFIG_PATH/accounts/</code>（已 gitignore）</p></div>
+          <div class="row">
+            <button id="btn-qr" class="btn primary">生成二维码</button>
+            <span id="qr-status" class="muted"></span>
+          </div>
+          <div id="qr-box" class="qr-box hidden">
+            <img id="qr-img" alt="qrcode" />
+            <p class="muted">请使用哔哩哔哩 App 扫码</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>账号列表</h3></div>
+          <div id="account-list" class="list"></div>
+        </div>
+      </section>
+
+      <section id="tab-config" class="tab">
+        <div class="card">
+          <div class="card-head"><h3>从项目生成抢票配置</h3><p>需先登录；写入 CONFIG_PATH 并创建 Pending 任务</p></div>
+          <div class="form-grid">
+            <label>项目 ID / URL <input id="project-id" placeholder="例如 102194" /></label>
+            <button id="btn-load-project" class="btn primary">加载项目</button>
+          </div>
+          <div id="project-meta" class="muted"></div>
+          <label>票档 <select id="ticket-options"></select></label>
+          <label>购票人（可多选，数量=选中人数） <select id="buyer-options" multiple size="5"></select></label>
+          <label>收货地址 <select id="addr-options"></select></label>
+          <div class="form-grid three">
+            <label>联系人姓名 <input id="cfg-buyer" placeholder="必填" /></label>
+            <label>联系人电话 <input id="cfg-tel" placeholder="必填" /></label>
+            <label>手机号 phone <input id="cfg-phone" placeholder="可选" /></label>
+          </div>
+          <div class="form-grid three">
+            <label>数量（自动） <input id="cfg-count" type="number" value="0" min="0" readonly /></label>
+            <label>配置文件名 <input id="cfg-name" placeholder="默认用 detail（保留中文）" /></label>
+            <label>起售 sale_start <input id="cfg-sale-start" readonly placeholder="选票档后显示" /></label>
+          </div>
+          <p class="muted">配置格式对齐 biliTickerBuy：含 <code>sale_start</code>（定时开抢）。Worker：<code>TICKET_TIME_START</code> 优先，否则用配置 <code>sale_start</code>。</p>
+          <button id="btn-generate" class="btn primary">生成并入队</button>
+          <pre id="generate-result" class="code"></pre>
+        </div>
+      </section>
+
+      <section id="tab-tasks" class="tab">
+        <div class="card">
+          <div class="card-head"><h3>上传配置 JSON</h3></div>
+          <div class="row">
+            <input type="file" id="upload-files" multiple accept=".json,application/json" />
+            <button id="btn-upload" class="btn primary">上传并入队</button>
+            <button id="btn-reload" class="btn">从目录重载</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>任务列表</h3></div>
+          <div class="table-wrap"><table id="tasks-table"><thead>
+            <tr><th>名称</th><th>状态</th><th>Worker</th><th>预览</th><th>重试</th><th>更新</th><th>操作</th></tr>
+          </thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>磁盘配置文件</h3></div>
+          <div class="table-wrap"><table id="configs-table"><thead>
+            <tr><th>文件</th><th>大小</th><th>任务状态</th><th>修改时间</th></tr>
+          </thead><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab">
+        <div class="card">
+          <div class="card-head">
+            <h3>Worker 集群设置</h3>
+            <p>写入 <code>CONFIG_PATH/worker_settings.json</code>，经心跳下发到所有 worker（覆盖对应 env）。部署级变量仍用 compose/helm：<code>MASTER_SERVER_ADDR</code> / <code>CONFIG_PATH</code> / <code>WEB_*</code>。</p>
+          </div>
+          <p class="muted" id="ws-meta">version: -</p>
+          <form id="ws-form" class="ws-form">
+            <fieldset>
+              <legend>通知</legend>
+              <div class="form-grid">
+                <label>PushPlus <input name="pushplus_token" type="text" autocomplete="off" placeholder="token" /></label>
+                <label>Bark <input name="bark_token" type="text" autocomplete="off" placeholder="key 或 https://api.day.app/..." /></label>
+                <label>Server酱 Turbo <input name="serverchan_key" type="text" autocomplete="off" /></label>
+                <label>Server酱3 URL <input name="serverchan3_api_url" type="text" autocomplete="off" /></label>
+                <label>Telegram Bot <input name="telegram_bot_token" type="text" autocomplete="off" /></label>
+                <label>Telegram ChatID <input name="telegram_chat_id" type="text" autocomplete="off" /></label>
+                <label>Telegram 代理 <input name="telegram_http_proxy" type="text" autocomplete="off" placeholder="http://127.0.0.1:7890" /></label>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>节奏 / 风控</legend>
+              <div class="form-grid">
+                <label>抢票间隔 ms <input name="interval_ms" type="number" min="1" placeholder="300" /></label>
+                <label>429 延迟 ms <input name="rate_limit_delay_ms" type="number" min="0" placeholder="300" /></label>
+                <label>412 本地重试 <input name="risk_local_retries" type="number" min="1" placeholder="5" /></label>
+                <label>412 冷却基数 ms <input name="risk_cooldown_base_ms" type="number" min="100" placeholder="1000" /></label>
+                <label>412 冷却上限 s <input name="risk_cooldown_max_sec" type="number" min="1" placeholder="30" /></label>
+                <label>全局开抢时间 <input name="ticket_time_start" type="text" placeholder="2006-01-02T15:04" /></label>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>代理</legend>
+              <div class="form-grid">
+                <label class="full">代理列表 <textarea name="proxy_list" rows="2" placeholder="http://u:p@ip:port,socks5://ip:1080"></textarea></label>
+                <label>最大连续失败 <input name="proxy_max_fails" type="number" min="1" placeholder="3" /></label>
+                <label>冷却秒 <input name="proxy_cooldown_sec" type="number" min="1" placeholder="30" /></label>
+                <label>退避上限秒 <input name="proxy_max_backoff_sec" type="number" min="1" placeholder="300" /></label>
+                <label>代理 API URL <input name="proxy_api_url" type="text" /></label>
+                <label>API 数量 <input name="proxy_api_count" type="number" min="1" placeholder="5" /></label>
+                <label>API 协议 <input name="proxy_api_scheme" type="text" placeholder="http" /></label>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>连接 / 预热</legend>
+              <div class="form-grid">
+                <label>ConnPerHost <input name="conn_per_host" type="number" min="1" max="32" placeholder="4" /></label>
+                <label>Create 批大小 <input name="create_batch_size" type="number" min="1" max="32" placeholder="2" /></label>
+                <label class="check"><input name="enable_warmup" type="checkbox" /> 启用连接预热</label>
+              </div>
+            </fieldset>
+            <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
+              <button type="submit" class="btn primary" id="btn-ws-save">保存并下发</button>
+              <button type="button" class="btn" id="btn-ws-reload">重新加载</button>
+              <button type="button" class="btn" id="btn-ws-export">导出 .env</button>
+            </div>
+            <pre id="ws-export" class="code-block hidden"></pre>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>运行时参数（只读）</h3><p>来自 master 进程</p></div>
+          <div id="runtime-meta" class="kv"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>功能矩阵</h3></div>
+          <div id="feature-matrix" class="feature-grid"></div>
+        </div>
+        <div class="card muted-card">
+          <div class="card-head"><h3>说明</h3></div>
+          <p>密钥字段脱敏显示；保存时若仍为脱敏值则保留原密钥。Worker 在心跳时拉取最新配置（通常数秒内生效）。</p>
+        </div>
+      </section>
+
+      <section id="tab-update" class="tab">
+        <div class="card">
+          <div class="card-head"><h3>当前版本</h3></div>
+          <div id="version-box" class="kv"></div>
+          <div class="row" style="margin-top:12px">
+            <a id="link-releases" class="btn primary" href="https://github.com/mikumifa/biliTickerStorm/releases" target="_blank" rel="noopener">GitHub Releases</a>
+            <a id="link-repo" class="btn" href="https://github.com/mikumifa/biliTickerStorm" target="_blank" rel="noopener">仓库</a>
+            <a id="link-buy" class="btn" href="https://github.com/mikumifa/biliTickerBuy" target="_blank" rel="noopener">biliTickerBuy</a>
+          </div>
+          <p class="muted" style="margin-top:12px">集群以 Docker 镜像 / Helm chart 升级；非本机 exe 自动更新。镜像：<code>mikumifa/bili-ticker-storm-*</code>，tag 建议用 <code>v*</code>。</p>
+        </div>
+      </section>
+
+      <section id="tab-events" class="tab">
+        <div class="card">
+          <div class="card-head row-between">
+            <div>
+              <h3>Master 事件流</h3>
+              <p>调度 / 风控 / 任务变更（环形缓冲，非 worker 全量日志）</p>
+            </div>
+            <div class="row" style="margin:0">
+              <button id="btn-events-refresh" class="btn sm">刷新</button>
+              <button id="btn-events-clear" class="btn sm danger">清空</button>
+            </div>
+          </div>
+          <div class="row">
+            <label class="inline">级别
+              <select id="event-level">
+                <option value="">全部</option>
+                <option value="info">info</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+            </label>
+            <label class="inline">关键词 <input id="event-filter" placeholder="过滤消息" /></label>
+          </div>
+          <div id="events-list" class="events"></div>
+        </div>
+      </section>
+
+      <section id="tab-guide" class="tab">
+        <div class="card">
+          <h3>使用说明</h3>
+          <ol>
+            <li>本页「账号登录 + 生成配置」或 biliTickerBuy 产出 JSON → master <code>CONFIG_PATH</code>。</li>
+            <li>启动 worker（<code>MASTER_SERVER_ADDR</code>）；Idle 后自动 PushTask。可选 <code>PROXY_LIST</code>。</li>
+            <li>412：任务回 Pending，worker 冷却约 ban_timeout（默认 5 分钟）。</li>
+            <li>生产建议设置 <code>WEB_TOKEN</code>，控制台右上角填入。</li>
+            <li>Compose：<code>docker compose up --build</code> 后浏览器打开 <code>http://localhost:8080</code>。</li>
+          </ol>
+          <p>
+            <a href="https://github.com/mikumifa/biliTickerStorm" target="_blank">Storm</a> ·
+            <a href="https://github.com/mikumifa/biliTickerBuy" target="_blank">Buy</a> ·
+            <a href="/docs/集群搭建参考.md" target="_blank">集群文档（仓库）</a>
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

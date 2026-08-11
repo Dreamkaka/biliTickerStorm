@@ -6,9 +6,20 @@
 
 | 服务名             | 说明              | 备注    |
 | --------------- | --------------- | ----- |
-| `ticket-master` | 主控服务，负责调度任务     | 单实例部署 |
-| `ticket-worker` | 抢票 worker，可横向扩展 | 支持多实例 |
-| `gt-python`     | 图形验证码处理服务       | 单实例部署 |
+| `ticket-master` | 主控服务，调度 + WebUI | gRPC `:40052`，控制台 HTTP `:8080` |
+| `ticket-worker` | 抢票 worker，可横向扩展 | 支持多实例；代理池 / 本地 412 恢复 |
+
+Master 内嵌 WebUI（对齐 biliTickerBuy 能力、适配集群）：集群看板、账号登录、生成配置、任务上传/重入队、事件日志、版本与设置。可选环境变量 `WEB_ADDR`、`WEB_TOKEN`。
+
+### 🖥️ 打开 WebUI
+
+| 方式 | 地址 |
+|------|------|
+| 本地 `go run ./cmd/master`（`CONFIG_PATH=data`） | http://127.0.0.1:8080 |
+| `docker compose up --build` | http://localhost:8080 |
+| Helm（默认 NodePort `30080`） | `http://<节点IP>:30080` 或 `kubectl port-forward svc/ticket-master 8080:8080` |
+
+详细说明见 [docs/WebUI.md](docs/WebUI.md)。生产环境请设置 `WEB_TOKEN`。
 
 ---
 
@@ -28,15 +39,17 @@ helm repo update
 ```bash
 helm install bili-ticker-storm bili-ticker-storm/bili-ticker-storm \
   --set ticketMaster.hostDataPath=/your/host/data/path \
+  --set ticketMaster.webToken="your_web_token" \
   --set ticketWorker.pushplusToken="your_token" \
   --set ticketWorker.ticketInterval="300" \
   --set ticketWorker.ticketTimeStart="2025-05-20T13:14"
   
 ```
 
-> - `hostDataPath` 是抢票配置文件目录，挂载给 `ticket-master` 容器用。抢票配置文件生成使用 https://github.com/mikumifa/biliTickerBuy
-> - `ticketWorker.pushplusToken` 是plusplus 推送配置，设置后可以接收抢票结果通知。
-> - `ticketWorker.ticketInterval` 是抢票间隔秒数，默认 300 毫秒。
+> - `hostDataPath` 是抢票配置文件目录，挂载给 `ticket-master` 容器用。抢票配置也可用 WebUI「生成配置」或 https://github.com/mikumifa/biliTickerBuy
+> - `ticketMaster.webToken` 为 WebUI API 鉴权（可选，生产建议设置）；WebUI 默认 NodePort `30080`
+> - `ticketWorker.pushplusToken` 是 PushPlus 推送配置，设置后可以接收抢票结果通知。
+> - `ticketWorker.ticketInterval` 是抢票间隔**毫秒**，默认 300。
 > - `ticketWorker.ticketTimeStart` 是定时启动时间，格式为 `2025-05-20T13:14`，不填默认打开容器直接开始抢票。
 
 ### 3. 升级 Chart

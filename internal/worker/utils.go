@@ -1,11 +1,8 @@
 package worker
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 )
 
@@ -31,22 +28,6 @@ func ReadFileAsString(filename string) (string, error) {
 	return string(data), nil
 }
 
-// 发送PushPlus消息
-func sendPushPlusMessage(token, title, content string) error {
-	data := map[string]string{
-		"token":   token,
-		"title":   title,
-		"content": content,
-	}
-
-	jsonData, _ := json.Marshal(data)
-	resp, err := http.Post("http://www.pushplus.plus/send", "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return nil
-}
 func GetNestedString(m map[string]interface{}, keys ...string) (string, bool) {
 	var val interface{} = m
 	for _, key := range keys {

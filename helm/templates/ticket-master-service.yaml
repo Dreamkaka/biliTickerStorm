@@ -3,9 +3,18 @@ kind: Service
 metadata:
   name: ticket-master
 spec:
+  type: {{ .Values.ticketMaster.serviceType | default "ClusterIP" }}
   selector:
     app: ticket-master
   ports:
-    - protocol: TCP
+    - name: grpc
+      protocol: TCP
       port: 40052
       targetPort: 40052
+    - name: web
+      protocol: TCP
+      port: {{ .Values.ticketMaster.webPort }}
+      targetPort: {{ .Values.ticketMaster.webPort }}
+      {{- if and (eq (.Values.ticketMaster.serviceType | default "ClusterIP") "NodePort") .Values.ticketMaster.webNodePort }}
+      nodePort: {{ .Values.ticketMaster.webNodePort }}
+      {{- end }}

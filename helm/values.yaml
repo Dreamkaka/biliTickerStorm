@@ -3,16 +3,30 @@ ticketMaster:
   replicas: 1
   configPath: /app/data
   hostDataPath: /run/desktop/mnt/host/c/Users/mikumifa/GolandProjects/biliTickerStorm/data
+  webAddr: ":8080"
+  webToken: ""
+  webPort: 8080
+  # NodePort 方便本机浏览器打开 UI；生产可改 ClusterIP + Ingress
+  serviceType: NodePort
+  webNodePort: 30080
 
 ticketWorker:
   image: mikumifa/bili-ticker-storm-worker:latest
   pushplusToken: ""
-  ticketInterval: ""
+  barkToken: ""
+  serverchanKey: ""
+  serverchan3ApiUrl: ""
+  telegramBotToken: ""
+  telegramChatId: ""
+  telegramHttpProxy: ""
+  ticketInterval: "300"
   masterServerAddr: ticket-master:40052
-  time: ticket-master:40052
-  gtBaseUrl: http://gt-python:8000
-  ticketTimeStart: 2006-01-02T15:04
-
-gtPython:
-  image: mikumifa/bili-ticker-storm-gt-python:latest
-  replicas: 1
+  rateLimitDelayMs: "300"
+  riskLocalRetries: "5"
+  proxyList: ""
+  proxyApiUrl: ""
+  connPerHost: "4"
+  createBatchSize: "2"
+  enableWarmup: "true"
+  # 留空表示容器启动后立即抢票；格式 2006-01-02T15:04（Asia/Shanghai）
+  ticketTimeStart: ""

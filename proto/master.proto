@@ -14,11 +14,16 @@ message WorkerInfo {
   int32 workStatus = 3; // "Idle", "Working", "Risking"
   string TaskAssigned = 4; //Task id
   string taskStatus=5;
-
+  // 可选：风控原因 / 当前代理（旧 worker 不填）
+  string status_detail = 6;
+  string proxy_label = 7;
 }
 message RegisterReply {
   bool success = 1;
   string message = 2;
+  // worker 运行参数 JSON（workercfg.Settings）；空表示不下发
+  string worker_config_json = 3;
+  int64 config_version = 4;
 }
 
 
@@ -26,6 +31,8 @@ message CancelTaskInfo {
   string cancelTaskId = 1; //
   string workerId=2;
   int32 workStatus=3;
+  string reason = 4;
+  string proxy_label = 5;
 }
 
 message CancelReply {

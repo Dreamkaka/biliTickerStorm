@@ -5,7 +5,12 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o master cmd/master/main.go
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X biliTickerStorm/internal/master.Version=${VERSION} -X biliTickerStorm/internal/master.GitCommit=${GIT_COMMIT} -X biliTickerStorm/internal/master.BuildTime=${BUILD_TIME}" \
+    -o master cmd/master/main.go
 
 # 运行阶段
 FROM alpine:latest

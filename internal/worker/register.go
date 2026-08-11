@@ -5,11 +5,12 @@ import (
 	masterpb "biliTickerStorm/internal/master/pb"
 	"context"
 	"fmt"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"os"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Register struct {
@@ -20,6 +21,8 @@ type Register struct {
 	ws           WorkerStatus
 	ts           TaskStatus
 	TaskAssigned string
+	statusDetail string
+	proxyLabel   string
 	stopChan     chan struct{}
 }
 
@@ -37,6 +40,23 @@ func (wm *Register) SetStatus(ws WorkerStatus, ts TaskStatus, taskId string) {
 	wm.TaskAssigned = taskId
 }
 
+func (wm *Register) SetDetail(detail, proxy string) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	if detail != "" {
+		wm.statusDetail = detail
+	}
+	if proxy != "" {
+		wm.proxyLabel = proxy
+	}
+}
+
+func (wm *Register) ClearDetail() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.statusDetail = ""
+}
+
 func NewWorkerManager(masterAddr string) *Register {
 	hostname, _ := os.Hostname()
 	workerID := fmt.Sprintf("worker-%s-%d", hostname, time.Now().Unix())
@@ -46,6 +66,7 @@ func NewWorkerManager(masterAddr string) *Register {
 		masterAddr: masterAddr,
 		ws:         Idle,
 		stopChan:   make(chan struct{}),
+		proxyLabel: proxyDirectLabel,
 	}
 }
 
@@ -86,6 +107,8 @@ func (wm *Register) sendHeartbeat() error {
 	ws := wm.ws
 	ts := wm.ts
 	taskAssigned := wm.TaskAssigned
+	detail := wm.statusDetail
+	proxy := wm.proxyLabel
 	wm.mu.Unlock()
 
 	conn, err := grpc.Dial(wm.masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -101,19 +124,38 @@ func (wm *Register) sendHeartbeat() error {
 		WorkStatus:   int32(ws),
 		TaskStatus:   string(ts),
 		TaskAssigned: taskAssigned,
+		StatusDetail: detail,
+		ProxyLabel:   proxy,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = client.RegisterWorker(ctx, req)
+	reply, err := client.RegisterWorker(ctx, req)
 	if err != nil {
 		log.Errorf("%v", err)
+		return err
 	}
-	return err
+	if reply != nil && (reply.WorkerConfigJson != "" || reply.ConfigVersion > 0) {
+		ApplyRemoteSettings(reply.WorkerConfigJson, reply.ConfigVersion)
+	}
+	return nil
 }
+
 func (wm *Register) CancelTask(s WorkerStatus) error {
+	return wm.CancelTaskWithReason(s, "", "")
+}
+
+func (wm *Register) CancelTaskWithReason(s WorkerStatus, reason, proxy string) error {
 	wm.mu.Lock()
 	taskID := wm.TaskAssigned
+	if reason != "" {
+		wm.statusDetail = reason
+	}
+	if proxy != "" {
+		wm.proxyLabel = proxy
+	}
+	detail := wm.statusDetail
+	pl := wm.proxyLabel
 	wm.mu.Unlock()
 
 	conn, err := grpc.Dial(wm.masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -127,6 +169,8 @@ func (wm *Register) CancelTask(s WorkerStatus) error {
 		WorkerId:     wm.workerID,
 		CancelTaskId: taskID,
 		WorkStatus:   int32(s),
+		Reason:       detail,
+		ProxyLabel:   pl,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -143,6 +187,11 @@ func (wm *Register) CancelTask(s WorkerStatus) error {
 // UpdateWorkerStatusAndTaskStatus 更新 ws和ts，同时触发task的updateTime
 func (wm *Register) UpdateWorkerStatusAndTaskStatus(ws WorkerStatus, ts TaskStatus, taskId string) error {
 	wm.SetStatus(ws, ts, taskId)
+	if ws == Idle || ws == Working {
+		if ws == Idle {
+			wm.ClearDetail()
+		}
+	}
 	return wm.sendHeartbeat()
 }
 

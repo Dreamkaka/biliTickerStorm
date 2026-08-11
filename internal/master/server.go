@@ -25,6 +25,8 @@ type Worker struct {
 	TaskAssigned string
 	UpdateTime   time.Time //心跳
 	BanTime      time.Time //风控时间
+	StatusDetail string    // 风控原因等
+	ProxyLabel   string    // 当前代理脱敏
 }
 
 // Server 服务器结构
@@ -35,6 +37,9 @@ type Server struct {
 	// 任务管理
 	tasks    map[string]*TaskInfo
 	tasksMux sync.RWMutex
+	// Web 事件流
+	events    []EventRecord
+	eventsMux sync.RWMutex
 	// 配置
 	heartbeatTimeout time.Duration
 	taskTimeout      time.Duration
@@ -44,6 +49,8 @@ type Server struct {
 	// 停止信号
 	stopChan        chan struct{}
 	scheduleTrigger chan struct{} // 🔔 调度触发通道
+	// WebUI 可写的 worker 运行参数
+	workerSettings *workerSettingsStore
 }
 
 // NewServer 创建新的服务器实例
@@ -51,12 +58,14 @@ func NewServer() *Server {
 	server := &Server{
 		workers:          make(map[string]*Worker),
 		tasks:            make(map[string]*TaskInfo),
+		events:           make([]EventRecord, 0, maxEvents),
 		heartbeatTimeout: 10 * time.Second, //
 		taskTimeout:      30 * time.Second, //
 		banTimeout:       5 * time.Minute,  //
 		maxRetries:       3,
 		stopChan:         make(chan struct{}),
 		scheduleTrigger:  make(chan struct{}, 1),
+		workerSettings:   newWorkerSettingsStore(Cfg.Configpath),
 	}
 
 	go server.startHeartbeatChecker()
@@ -65,6 +74,16 @@ func NewServer() *Server {
 
 	return server
 
+}
+
+func (s *Server) registerReply(msg string) *masterpb.RegisterReply {
+	jsonStr, ver := s.workerSettings.ConfigJSON()
+	return &masterpb.RegisterReply{
+		Success:          true,
+		Message:          msg,
+		WorkerConfigJson: jsonStr,
+		ConfigVersion:    ver,
+	}
 }
 
 func (s *Server) LoadTasksFromDir(dirPath string) error {
@@ -117,14 +136,24 @@ func (s *Server) CancelTask(ctx context.Context, req *masterpb.CancelTaskInfo) (
 		if cancelTask.AssignedTo == req.WorkerId || cancelTask.Status == TaskStatusDoing {
 			log.Printf("[Reassign] cancel task %s from %s -> PENDING", req.CancelTaskId, ownWorkerId)
 			s.clearAndPendingTask(cancelTask)
+			s.PushEvent("warn", fmt.Sprintf("CancelTask 任务回 Pending: %s from %s", req.CancelTaskId, ownWorkerId))
 		}
 	}
 
 	worker.TaskAssigned = ""
+	if req.Reason != "" {
+		worker.StatusDetail = req.Reason
+	}
+	if req.ProxyLabel != "" {
+		worker.ProxyLabel = req.ProxyLabel
+	}
 	newStatus := WorkerStatus(req.WorkStatus)
 	if newStatus == Risking {
 		if worker.Status != Risking {
-			log.Printf("Worker %s 出现风控，标记为Risking，冷却 %.0fs", ownWorkerId, s.banTimeout.Seconds())
+			log.Printf("Worker %s 出现风控，标记为Risking，冷却 %.0fs reason=%s proxy=%s",
+				ownWorkerId, s.banTimeout.Seconds(), worker.StatusDetail, worker.ProxyLabel)
+			s.PushEvent("warn", fmt.Sprintf("Worker 风控: %s reason=%s proxy=%s",
+				ownWorkerId, emptyDash(worker.StatusDetail), emptyDash(worker.ProxyLabel)))
 		}
 		worker.BanTime = time.Now()
 	}
@@ -148,6 +177,12 @@ func (s *Server) RegisterWorker(ctx context.Context, req *masterpb.WorkerInfo) (
 	if exists {
 		existingWorker.Address = req.Address
 		existingWorker.UpdateTime = time.Now()
+		if req.StatusDetail != "" {
+			existingWorker.StatusDetail = req.StatusDetail
+		}
+		if req.ProxyLabel != "" {
+			existingWorker.ProxyLabel = req.ProxyLabel
+		}
 		reported := WorkerStatus(req.WorkStatus)
 
 		// 冷却期内禁止心跳把 Risking 刷成 Idle/Working
@@ -159,7 +194,12 @@ func (s *Server) RegisterWorker(ctx context.Context, req *masterpb.WorkerInfo) (
 		if existingWorker.Status != reported {
 			if reported == Risking && existingWorker.Status != Risking {
 				existingWorker.BanTime = time.Now()
-				log.Printf("Worker %s 心跳上报风控，标记为Risking", req.WorkerId)
+				log.Printf("Worker %s 心跳上报风控，标记为Risking reason=%s", req.WorkerId, existingWorker.StatusDetail)
+				s.PushEvent("warn", fmt.Sprintf("Worker 风控(心跳): %s reason=%s proxy=%s",
+					req.WorkerId, emptyDash(existingWorker.StatusDetail), emptyDash(existingWorker.ProxyLabel)))
+			}
+			if reported != Risking && existingWorker.Status == Risking {
+				existingWorker.StatusDetail = ""
 			}
 			existingWorker.Status = reported
 			s.triggerSchedule()
@@ -190,10 +230,7 @@ func (s *Server) RegisterWorker(ctx context.Context, req *masterpb.WorkerInfo) (
 				task.UpdatedAt = time.Now()
 			}
 		}
-		return &masterpb.RegisterReply{
-			Success: true,
-			Message: "Worker Update Successfully",
-		}, nil
+		return s.registerReply("Worker Update Successfully"), nil
 	}
 	newWorker := &Worker{
 		WorkerID:     req.WorkerId,
@@ -201,14 +238,14 @@ func (s *Server) RegisterWorker(ctx context.Context, req *masterpb.WorkerInfo) (
 		Status:       WorkerStatus(req.WorkStatus),
 		TaskAssigned: req.TaskAssigned,
 		UpdateTime:   time.Now(),
+		StatusDetail: req.StatusDetail,
+		ProxyLabel:   req.ProxyLabel,
 	}
 	s.workers[req.WorkerId] = newWorker
 	log.Infof("Worker Register: ID=%s, Address=%s, WorkStatus=%s",
 		req.WorkerId, req.Address, WorkerStatus(req.WorkStatus).String())
-	return &masterpb.RegisterReply{
-		Success: true,
-		Message: "Worker Register Successfully",
-	}, nil
+	s.PushEvent("info", fmt.Sprintf("Worker 注册: %s @ %s", req.WorkerId, req.Address))
+	return s.registerReply("Worker Register Successfully"), nil
 }
 
 // 心跳检查器
@@ -370,38 +407,33 @@ func (s *Server) monitorTasks() {
 	defer s.tasksMux.Unlock()
 
 	now := time.Now()
-	pendingTasks := make([]*TaskInfo, 0)
-	doingTasks := make([]*TaskInfo, 0)
-	doneTasks := make([]*TaskInfo, 0)
+	pendingN, doingN, doneN := 0, 0, 0
+	needSchedule := false
 
-	DoneTaskNum := 0
 	for _, task := range s.tasks {
-		if task.Status == TaskStatusDoing {
+		switch task.Status {
+		case TaskStatusDoing:
 			if now.Sub(task.UpdatedAt) > s.taskTimeout {
 				log.Printf("[Timeout] Task %s timeout, marked as PENDING", task.ID)
-				task.Status = TaskStatusPending
-				pendingTasks = append(pendingTasks, task)
+				s.clearAndPendingTask(task)
+				s.PushEvent("warn", fmt.Sprintf("任务超时回 Pending: %s", task.TaskName))
+				needSchedule = true
+				pendingN++
 			} else {
-				doingTasks = append(doingTasks, task)
+				doingN++
 			}
-		} else if task.Status == TaskStatusPending {
-			pendingTasks = append(pendingTasks, task)
-		} else if task.Status == TaskStatusDone {
-			doneTasks = append(doneTasks, task)
+		case TaskStatusPending:
+			pendingN++
+			needSchedule = true
+		case TaskStatusDone:
+			doneN++
 		}
 	}
-	if DoneTaskNum == len(s.tasks) {
-		log.Infof("[Complete] All tasks done")
-		log.Exit(0)
-	}
 
-	log.Infof("[Task] Pending: %d, Done: %d, Doing: %d", len(pendingTasks), len(doneTasks), len(doingTasks))
-	// 重新分配risking任务
-	if len(pendingTasks) > 0 {
-		defer s.triggerSchedule()
-	}
-	for _, task := range pendingTasks {
-		s.clearAndPendingTask(task)
+	// 集群 master 常驻：无任务 / 全部 Done 也不退出，等待 WebUI 或目录新增配置
+	log.Infof("[Task] Pending: %d, Done: %d, Doing: %d", pendingN, doneN, doingN)
+	if needSchedule {
+		s.triggerSchedule()
 	}
 }
 
@@ -447,6 +479,7 @@ func (s *Server) assignTaskToWorker(task *TaskInfo, worker *Worker) bool {
 	worker.TaskAssigned = task.ID
 	s.workersMux.Unlock()
 	log.Printf("[Assign] Task <%s> -> Worker <%s>", task.TaskName, worker.Address)
+	s.PushEvent("info", fmt.Sprintf("分配任务 %s -> %s", task.TaskName, worker.WorkerID))
 	return true
 }
 
@@ -456,4 +489,11 @@ func (s *Server) clearAndPendingTask(task *TaskInfo) {
 	task.Status = TaskStatusPending
 	task.AssignedTo = ""
 	task.UpdatedAt = time.Now()
+}
+
+func emptyDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
