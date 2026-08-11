@@ -230,11 +230,27 @@ func sanitizeTaskName(name string) string {
 	return ticketcfg.FilenameFilter(name)
 }
 
+// reservedConfigBasenames 与抢票任务 JSON 共存于 CONFIG_PATH，加载任务时必须跳过。
+var reservedConfigBasenames = map[string]struct{}{
+	"worker_settings": {},
+}
+
+// isReservedConfigFile 判断 CONFIG_PATH 下文件名是否为系统/集群配置（非抢票任务）。
+func isReservedConfigFile(filename string) bool {
+	base := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	base = strings.ToLower(strings.TrimSpace(base))
+	_, ok := reservedConfigBasenames[base]
+	return ok
+}
+
 // AddTaskFromJSONBytes 原样写入 JSON 字节（保持 Buy 字段顺序与 cookies 形态）
 func (s *Server) AddTaskFromJSONBytes(name string, content []byte, writeFile bool) (*TaskInfo, error) {
 	name = sanitizeTaskName(name)
 	if name == "" {
 		name = fmt.Sprintf("task-%d", time.Now().Unix())
+	}
+	if isReservedConfigFile(name + ".json") {
+		return nil, fmt.Errorf("名称 %q 为系统保留配置，不能作为抢票任务", name)
 	}
 	var probe map[string]interface{}
 	if err := json.Unmarshal(content, &probe); err != nil {
@@ -303,7 +319,7 @@ func (s *Server) DeleteTask(taskID string, deleteFile bool) error {
 	s.PushEvent("info", fmt.Sprintf("删除任务: %s (%s)", name, taskID))
 	s.triggerSchedule()
 
-	if deleteFile && name != "" {
+	if deleteFile && name != "" && !isReservedConfigFile(name+".json") {
 		path := filepath.Join(Cfg.Configpath, name+".json")
 		_ = os.Remove(path)
 	}
@@ -331,6 +347,9 @@ func (s *Server) ReloadTasksFromDir() (int, error) {
 	added := 0
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		if isReservedConfigFile(file.Name()) {
 			continue
 		}
 		fullPath := filepath.Join(Cfg.Configpath, file.Name())
@@ -378,6 +397,9 @@ func (s *Server) ListConfigFiles() ([]ConfigFileView, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
+		if isReservedConfigFile(e.Name()) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -403,6 +425,9 @@ func (s *Server) ReadConfigFile(name string) (string, error) {
 	name = sanitizeTaskName(name)
 	if name == "" {
 		return "", fmt.Errorf("invalid name")
+	}
+	if isReservedConfigFile(name + ".json") {
+		return "", fmt.Errorf("reserved config")
 	}
 	path := filepath.Join(Cfg.Configpath, name+".json")
 	b, err := os.ReadFile(path)

@@ -1,35 +1,36 @@
-# HTTP/2 与 JA3 评估结论
+# HTTP/2 与 JA3
 
-> 迁移清单第 6 步。结论：**本阶段不实现 JA3 / local_fanout**，继续使用 `fasthttp` HTTP/1.1 + 代理池。
+## 结论（现行）
 
-## 上游能力（biliTickerBuy）
+Worker 使用 **uTLS `HelloChrome_Auto` + HTTP/2（优先）+ HTTP/1.1 回退**：
 
-- `util/h2client/*`：HTTP/2 客户端与连接复用
-- JA3 / TLS 指纹伪装（浏览器指纹对齐）
-- `local_fanout`：按源 IP/代理维持多条 createV2 连接并预热
+1. TLS ClientHello 模拟桌面 Chrome（JA3 接近浏览器）。
+2. ALPN 声明 `h2, http/1.1`；`show.bilibili.com` 等会协商 **h2**。
+3. `alpnTransport`：HTTPS 先走 `golang.org/x/net/http2`；仅当 ALPN 非 h2 时回退 `net/http` HTTP/1.1。
+4. 自定义 `DialTLS` 返回 `utlsConn`，实现 `crypto/tls.ConnectionState`，供 http2 读协商协议。
+5. 代理：HTTP CONNECT / SOCKS5 在 Dial 层完成后再 uTLS 握手。
+6. **仍不实现** 上游完整 `local_fanout`（多源 IP 多 H2 连接扇出）；多连接靠 `CONN_PER_HOST` + `CREATE_BATCH_SIZE` + `Warmup`。
 
-## Go 生态可选方案
+## 故障背景
 
-| 方案 | 说明 | 风险/成本 |
-|------|------|-----------|
-| 标准库 `net/http` + HTTP/2 | 易用，无 JA3 | 指纹与 Chrome 差异大 |
-| `fasthttp`（当前） | 高性能 HTTP/1.1 | 无原生 HTTP/2/JA3 |
-| `refraction-networking/utls` + 自定义 transport | 可模拟 Chrome JA3 | 维护成本高，需自研连接池/代理拨号 |
-| `bogdanfinn/tls-client` 等 | 封装 utls | 依赖体积大，API 与 fasthttp 不兼容 |
-| CGO / 外部浏览器 | 最接近真浏览器 | 集群 worker 不适合 |
+若 ALPN 协商到 h2 却用 HTTP/1.1 解析，会出现：
 
-## 决策（更新）
+```text
+net/http: HTTP/1.x transport connection broken: malformed HTTP response "\x00\x00\x12\x04..."
+```
 
-1. **HTTP 层**：已从 `fasthttp` 迁到标准库 `net/http` + **uTLS `HelloChrome_Auto`**，TLS ClientHello 模拟桌面 Chrome，避免 Go 默认 JA3。
-2. **HTTP 头**：`BrowserFingerprint` 对齐上游 `build_headers_from_browser_state`（UA / sec-ch-ua / sec-fetch-* / Accept-Language 等），会话内固定。
-3. **多连接（HTTP/1.1）**：`CONN_PER_HOST` 控制 `MaxConnsPerHost` / 空闲池；`CREATE_BATCH_SIZE` 并发 createV2。
-4. **预热**：`ENABLE_WARMUP` 时，开售前与 `100001` 后执行 `Warmup`（并发 GET 首页/详情 + 详情复检）。
-5. **仍不实现** 完整 HTTP/2 `local_fanout`（ALPN 固定 `http/1.1` + uTLS Chrome）。
-6. **代理**：HTTP CONNECT / SOCKS5 在 Dial 层完成后再做 uTLS 握手。
+（`\x00\x00\x12\x04` 为 HTTP/2 SETTINGS 帧前缀。）
 
-## 与迁移清单对齐
+## 上游对照（biliTickerBuy）
 
-- [x] 调研方案
-- [x] 决定：本阶段不迁移 local_fanout/JA3
-- [x] 文档明确 fasthttp 行为差异
-- [ ] 实现 H2/JA3（搁置，非阻塞主链路）
+| 能力 | 上游 | 本仓库 |
+|------|------|--------|
+| HTTP/2 | `util/h2client/*` | `x/net/http2` + uTLS |
+| JA3 / Chrome TLS | 浏览器态 | `HelloChrome_Auto` |
+| local_fanout | 多连接预热扇出 | 未做；`CONN_PER_HOST`/`CREATE_BATCH_SIZE`/`ENABLE_WARMUP` |
+
+## 相关代码
+
+- `internal/worker/tls_dial.go`：`chromeTLSDialer`、`utlsConn`、`alpnTransport`、`buildHTTPClient`
+- `internal/worker/fingerprint.go`：HTTP 头指纹
+- `internal/worker/warmup.go`：开售前/100001 后预热

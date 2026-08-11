@@ -96,17 +96,21 @@ func (s *Server) LoadTasksFromDir(dirPath string) error {
 		if file.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(file.Name(), ".json") {
-			fullPath := filepath.Join(dirPath, file.Name())
-			content, err := os.ReadFile(fullPath)
-			if err != nil {
-				log.Printf("Failed to read file %s: %v", fullPath, err)
-				continue
-			}
-			taskName := strings.TrimSuffix(file.Name(), ".json")
-			tickerConfigContent := string(content)
-			_ = s.CreateTask(taskName, tickerConfigContent)
+		if !strings.HasSuffix(file.Name(), ".json") {
+			continue
 		}
+		if isReservedConfigFile(file.Name()) {
+			log.Infof("跳过非任务配置文件: %s", file.Name())
+			continue
+		}
+		fullPath := filepath.Join(dirPath, file.Name())
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			log.Printf("Failed to read file %s: %v", fullPath, err)
+			continue
+		}
+		taskName := strings.TrimSuffix(file.Name(), ".json")
+		_ = s.CreateTask(taskName, string(content))
 	}
 
 	return nil

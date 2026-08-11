@@ -13,6 +13,7 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+	"golang.org/x/net/http2"
 	"golang.org/x/net/proxy"
 )
 
@@ -32,7 +33,70 @@ func newChromeTLSDialer(proxyEntry *ProxyEntry) *chromeTLSDialer {
 	return d
 }
 
+// utlsConn 将 *utls.UConn 适配为 crypto/tls.ConnectionState，供 net/http 与 x/net/http2 读取 ALPN。
+type utlsConn struct {
+	*utls.UConn
+}
+
+func (c *utlsConn) ConnectionState() tls.ConnectionState {
+	cs := c.UConn.ConnectionState()
+	return tls.ConnectionState{
+		Version:                     cs.Version,
+		HandshakeComplete:           cs.HandshakeComplete,
+		DidResume:                   cs.DidResume,
+		CipherSuite:                 cs.CipherSuite,
+		NegotiatedProtocol:          cs.NegotiatedProtocol,
+		NegotiatedProtocolIsMutual:  true,
+		ServerName:                  cs.ServerName,
+		PeerCertificates:            cs.PeerCertificates,
+		VerifiedChains:              cs.VerifiedChains,
+		SignedCertificateTimestamps: cs.SignedCertificateTimestamps,
+		OCSPResponse:                cs.OCSPResponse,
+		TLSUnique:                   cs.TLSUnique,
+	}
+}
+
 func (d *chromeTLSDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return d.dialUTLS(ctx, addr)
+}
+
+// dialH2TLS 供 http2.Transport：握手后必须 ALPN=h2（自定义 Dial 时 x/net/http2 不校验 ALPN）。
+func (d *chromeTLSDialer) dialH2TLS(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+	c, err := d.dialUTLS(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if p := negotiatedALPN(c); p != "h2" {
+		_ = c.Close()
+		return nil, fmt.Errorf("http2: unexpected ALPN protocol %q; want %q", p, "h2")
+	}
+	return c, nil
+}
+
+// dialH1TLS 供 HTTP/1.1 Transport：若协商到 h2 则拒绝，避免 malformed HTTP response。
+func (d *chromeTLSDialer) dialH1TLS(ctx context.Context, network, addr string) (net.Conn, error) {
+	c, err := d.dialUTLS(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if p := negotiatedALPN(c); p == "h2" {
+		_ = c.Close()
+		return nil, fmt.Errorf("http2: unexpected ALPN protocol %q for HTTP/1.1 transport", p)
+	}
+	return c, nil
+}
+
+func negotiatedALPN(c net.Conn) string {
+	type stater interface {
+		ConnectionState() tls.ConnectionState
+	}
+	if s, ok := c.(stater); ok {
+		return s.ConnectionState().NegotiatedProtocol
+	}
+	return ""
+}
+
+func (d *chromeTLSDialer) dialUTLS(ctx context.Context, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -41,21 +105,19 @@ func (d *chromeTLSDialer) DialTLSContext(ctx context.Context, network, addr stri
 	if err != nil {
 		return nil, err
 	}
+	// 与 Chrome 一致：优先 h2，回退 http/1.1
 	cfg := &utls.Config{
 		ServerName:         host,
 		InsecureSkipVerify: false,
 		MinVersion:         tls.VersionTLS12,
-		// 当前 Transport 按 HTTP/1.1 解析；ALPN 仅声明 http/1.1，避免协商到 h2 后半截帧无法解析
-		NextProtos: []string{"http/1.1"},
+		NextProtos:         []string{"h2", "http/1.1"},
 	}
-	// HelloChrome_Auto 跟随较新 Chrome ClientHello（JA3 接近浏览器）
 	uconn := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
-	// 覆盖 spec 中的 ALPN，与 NextProtos / 上层 HTTP/1.1 客户端一致
 	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
 	if err == nil {
 		for i := range spec.Extensions {
 			if alpn, ok := spec.Extensions[i].(*utls.ALPNExtension); ok {
-				alpn.AlpnProtocols = []string{"http/1.1"}
+				alpn.AlpnProtocols = []string{"h2", "http/1.1"}
 			}
 		}
 		if err := uconn.ApplyPreset(&spec); err != nil {
@@ -66,7 +128,7 @@ func (d *chromeTLSDialer) DialTLSContext(ctx context.Context, network, addr stri
 		_ = raw.Close()
 		return nil, fmt.Errorf("utls handshake %s: %w", host, err)
 	}
-	return uconn, nil
+	return &utlsConn{UConn: uconn}, nil
 }
 
 func (d *chromeTLSDialer) dialTCP(ctx context.Context, addr string) (net.Conn, error) {
@@ -163,15 +225,51 @@ func (c *bufConn) Read(p []byte) (int, error) {
 
 const defaultConnPerHost = 4
 
-// buildHTTPClient 构造带 Chrome TLS + 多连接池的 http.Client。
+// alpnTransport 按 TLS ALPN 选择 h2 / HTTP/1.1；uTLS 拨号后 net/http 无法自动升级 h2。
+type alpnTransport struct {
+	dialer *chromeTLSDialer
+	h1     *http.Transport
+	h2     *http2.Transport
+}
+
+func (t *alpnTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL == nil || req.URL.Scheme != "https" {
+		return t.h1.RoundTrip(req)
+	}
+	// 优先走 HTTP/2（show.bilibili.com 等强制 h2 时必须）
+	resp, err := t.h2.RoundTrip(req)
+	if err == nil {
+		return resp, nil
+	}
+	// ALPN 非 h2 时 http2.Transport 报 unexpected ALPN；回退 HTTP/1.1
+	if isUnexpectedALPN(err) {
+		return t.h1.RoundTrip(req)
+	}
+	return nil, err
+}
+
+func isUnexpectedALPN(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "unexpected ALPN")
+}
+
+func (t *alpnTransport) CloseIdleConnections() {
+	t.h1.CloseIdleConnections()
+	t.h2.CloseIdleConnections()
+}
+
+// buildHTTPClient 构造带 Chrome TLS + HTTP/2（优先）+ HTTP/1.1 回退的 http.Client。
 func buildHTTPClient(fp *BrowserFingerprint, pool *ProxyPool) *http.Client {
 	var entry *ProxyEntry
 	if pool != nil {
 		entry = pool.Current()
 	}
 	perHost := defaultConnPerHost
-	if Cfg != nil && Cfg.ConnPerHost > 0 {
-		perHost = Cfg.ConnPerHost
+	cfg := GetConfig()
+	if cfg != nil && cfg.ConnPerHost > 0 {
+		perHost = cfg.ConnPerHost
 	}
 	if perHost < 1 {
 		perHost = 1
@@ -180,27 +278,40 @@ func buildHTTPClient(fp *BrowserFingerprint, pool *ProxyPool) *http.Client {
 		perHost = 32
 	}
 	dialer := newChromeTLSDialer(entry)
-	tr := &http.Transport{
-		Proxy:               nil, // TLS 经 DialTLSContext 处理代理隧道
-		DialTLSContext:      dialer.DialTLSContext,
-		ForceAttemptHTTP2:   false, // HTTP/1.1 多连接；完整 H2 见 docs/HTTP2_JA3.md
-		MaxIdleConns:        perHost * 4,
-		MaxIdleConnsPerHost: perHost,
-		MaxConnsPerHost:     perHost,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 15 * time.Second,
+
+	h1 := &http.Transport{
+		Proxy:                 nil, // TLS 经 DialTLSContext 处理代理隧道
+		DialTLSContext:        dialer.dialH1TLS,
+		ForceAttemptHTTP2:     false, // 由 alpnTransport 显式走 h2
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+		MaxIdleConns:          perHost * 4,
+		MaxIdleConnsPerHost:   perHost,
+		MaxConnsPerHost:       perHost,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		DisableCompression:    false,
 	}
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	h1.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		var nd net.Dialer
 		nd.Timeout = 15 * time.Second
 		return nd.DialContext(ctx, network, addr)
 	}
+
+	h2 := &http2.Transport{
+		// 忽略传入 tls.Config，统一走 uTLS Chrome 指纹；拨号后强制 ALPN=h2
+		DialTLSContext:     dialer.dialH2TLS,
+		AllowHTTP:          false,
+		DisableCompression: false,
+		IdleConnTimeout:    90 * time.Second,
+		ReadIdleTimeout:    30 * time.Second,
+		PingTimeout:        15 * time.Second,
+	}
+
 	_ = fp
 	return &http.Client{
-		Transport: tr,
+		Transport: &alpnTransport{dialer: dialer, h1: h1, h2: h2},
 		Timeout:   45 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {

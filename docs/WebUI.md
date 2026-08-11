@@ -62,10 +62,17 @@ kubectl port-forward svc/ticket-master 8080:8080
 
 `GET /api/v1/health` 始终无需鉴权。
 
-## 页面 Tab
+## UI（Material Design 3）
 
-| Tab | 作用 |
-|-----|------|
+- 技术：原生 ES Module + [@material/web](https://github.com/material-components/material-web)（已 vendor 于 `internal/master/web/static/vendor/material/`，**零前端构建**）
+- 布局：顶栏 + 宽屏 Navigation rail / 窄屏 Tabs；MD3 色板（默认深色，可切换浅色，`localStorage.bts_theme`）
+- 反馈：Snackbar、确认/详情 Dialog、顶栏加载条（替代原生 `alert`/`confirm`）
+- 静态资源：`//go:embed all:static` 打入 master 二进制
+
+## 页面导航
+
+| 页面 | 作用 |
+|------|------|
 | 集群看板 | Worker / Task 状态（约 3s 刷新） |
 | 账号登录 | 扫码登录，账号存 `CONFIG_PATH/accounts/` |
 | 生成配置 | 项目/票档/购票人 → JSON 落盘并入队 |
@@ -80,8 +87,9 @@ kubectl port-forward svc/ticket-master 8080:8080
 路径：`{CONFIG_PATH}/worker_settings.json`。WebUI「高级设置」可编辑；master 在 worker 心跳 `RegisterReply` 中下发。
 
 - 非空字段覆盖 worker 环境变量；`MASTER_SERVER_ADDR` 不可配置
-- 密钥字段 GET 脱敏；保存时若仍为 `****` 则保留原值
+- 密钥字段 GET 脱敏；保存时若仍为脱敏值则保留原值
 - API：`GET/PUT /api/v1/settings/worker`，`GET /api/v1/settings/worker/export`（完整 .env 片段）
+- **`worker_settings.json` 不会被当作抢票任务**：启动扫描、目录重载、配置列表均跳过该保留文件名；也不能用该名称创建任务
 
 ## 主要 API
 

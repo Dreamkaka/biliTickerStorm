@@ -13,7 +13,7 @@ BiliTickerStorm：B 站抢票调度集群（Go master/worker）。配置 JSON �
 - gRPC：`proto/*.proto` → 生成物已提交于 `internal/*/pb/`（**勿手改**）
 - 镜像：`master.Dockerfile` / `worker.Dockerfile`；compose 根目录 `docker-compose.yml`；K8s `helm/`（worker 为 DaemonSet）
 - 发布：仅 `v*` tag → `.github/workflows/main.yml` → Docker Hub `mikumifa/bili-ticker-storm-*` + Helm chart 到 `gh-pages`
-- Worker HTTP：`net/http` + uTLS Chrome 指纹（非 fasthttp）；完整 H2 fanout 未做，见 `docs/HTTP2_JA3.md`
+- Worker HTTP：uTLS Chrome + **HTTP/2 优先**（`x/net/http2`），ALPN 非 h2 时回退 HTTP/1.1；无完整 local_fanout，见 `docs/HTTP2_JA3.md`
 - 无 gt-python / 极验服务
 
 ## 命令
