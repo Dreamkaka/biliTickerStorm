@@ -1,25 +1,9 @@
-import { api, apiError, getToken } from "./api.js";
+import { api, apiError, getToken, setToken, clearToken } from "./api.js";
 import { toast, confirmDialog, showDialog, fieldValue, setFieldValue } from "./ui.js";
 import { esc, badge, fmtTime, kvHTML, emptyRow } from "./format.js";
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
-
-const featureLabels = {
-  cluster_dashboard: "集群看板",
-  task_crud: "任务 CRUD",
-  qr_login: "扫码登录",
-  config_generate: "生成配置",
-  event_log: "事件日志",
-  pushplus: "PushPlus（worker）",
-  proxy_pool: "代理池",
-  h2_ja3: "H2/JA3",
-  multi_notify: "多通道推送",
-  worker_settings: "Worker WebUI 设置",
-  payment_qr: "支付二维码",
-  page_gate: "开售页 gate",
-  local_audio: "本地音乐提醒",
-};
 
 const WS_STR = [
   "pushplus_token", "bark_token", "serverchan_key", "serverchan3_api_url",
@@ -43,43 +27,152 @@ let currentTab = "cluster";
 /* ---------- theme ---------- */
 function applyTheme(theme) {
   const t = theme === "light" ? "light" : "dark";
-  document.documentElement.setAttribute("data-theme", t);
   localStorage.setItem("bts_theme", t);
-  const icon = $("#theme-icon");
-  if (icon) icon.textContent = t === "dark" ? "light_mode" : "dark_mode";
+  if (window.mdui?.setTheme) {
+    window.mdui.setTheme(t);
+  } else {
+    document.documentElement.classList.toggle("mdui-theme-dark", t === "dark");
+    document.documentElement.classList.toggle("mdui-theme-light", t === "light");
+  }
+  const btn = $("#btn-theme");
+  if (btn) btn.icon = t === "dark" ? "light_mode" : "dark_mode";
 }
 applyTheme(localStorage.getItem("bts_theme") || "dark");
-$("#btn-theme")?.addEventListener("click", () => {
-  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+function toggleTheme() {
+  const cur = localStorage.getItem("bts_theme") || "dark";
   applyTheme(cur === "dark" ? "light" : "dark");
+}
+$("#btn-theme")?.addEventListener("click", toggleTheme);
+$("#btn-theme-gate")?.addEventListener("click", toggleTheme);
+
+/* ---------- auth gate ---------- */
+let appReady = false;
+let pollIntervalId = null;
+
+function showAuthGate(version) {
+  $("#auth-gate")?.classList.remove("hidden");
+  $("#app-shell")?.classList.add("hidden");
+  if (version) $("#auth-gate-version").textContent = version;
+  const field = $("#auth-token");
+  if (field) field.value = getToken();
+  $("#auth-error")?.classList.add("hidden");
+}
+
+function showAppShell() {
+  $("#auth-gate")?.classList.add("hidden");
+  $("#app-shell")?.classList.remove("hidden");
+}
+
+async function enterWithToken(raw) {
+  const t = String(raw || "").trim();
+  if (!t) {
+    const err = $("#auth-error");
+    if (err) {
+      err.textContent = "请输入 WEB_TOKEN";
+      err.classList.remove("hidden");
+    }
+    return false;
+  }
+  try {
+    await api("/api/v1/meta", { token: t });
+    setToken(t);
+    $("#auth-error")?.classList.add("hidden");
+    await bootApp();
+    return true;
+  } catch (e) {
+    const err = $("#auth-error");
+    if (err) {
+      err.textContent = e.message === "unauthorized" ? "Token 无效" : e.message;
+      err.classList.remove("hidden");
+    }
+    return false;
+  }
+}
+
+$("#btn-auth-enter")?.addEventListener("click", () => enterWithToken($("#auth-token")?.value));
+$("#auth-token")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    enterWithToken($("#auth-token")?.value);
+  }
 });
 
-/* ---------- token field ---------- */
-const tokenField = $("#token");
-if (tokenField) {
-  tokenField.value = localStorage.getItem("bts_token") || "";
-  tokenField.addEventListener("change", () => {
-    localStorage.setItem("bts_token", String(tokenField.value || "").trim());
-    loadMeta();
-  });
-  tokenField.addEventListener("input", () => {
-    localStorage.setItem("bts_token", String(tokenField.value || "").trim());
-  });
+$("#btn-logout")?.addEventListener("click", async () => {
+  clearToken();
+  appReady = false;
+  if (pollIntervalId) {
+    clearInterval(pollIntervalId);
+    pollIntervalId = null;
+  }
+  showAuthGate($("#hdr-version")?.textContent || "—");
+});
+
+async function bootstrap() {
+  // 先无 token 探测：未配置 WEB_TOKEN 时 meta 可匿名访问
+  try {
+    const meta = await api("/api/v1/meta", { token: "" });
+    if (!meta.web_auth_enabled) {
+      clearToken();
+      await bootApp();
+      return;
+    }
+  } catch {
+    // 需要鉴权或网络错误
+  }
+
+  // 已启用鉴权：若本地有 token 则校验
+  if (getToken()) {
+    try {
+      await api("/api/v1/meta");
+      await bootApp();
+      return;
+    } catch {
+      clearToken();
+    }
+  }
+
+  // 拉版本号（health 免鉴权）
+  let ver = "—";
+  try {
+    const h = await fetch("/api/v1/health").then((r) => r.json());
+    ver = h.version || "—";
+  } catch { /* ignore */ }
+  showAuthGate(ver);
+}
+
+async function bootApp() {
+  showAppShell();
+  if (!appReady) {
+    appReady = true;
+    await refreshAll();
+    if (!pollIntervalId) {
+      pollIntervalId = setInterval(() => {
+        if (currentTab !== "cluster" && currentTab !== "tasks") return;
+        loadOverview(true).catch(() => {});
+        loadWorkers(true).catch(() => {});
+        loadTasks(true).catch(() => {});
+      }, 3000);
+    }
+  } else {
+    await refreshAll();
+  }
 }
 
 /* ---------- navigation ---------- */
 function switchTab(tab) {
   if (!tab) return;
   currentTab = tab;
-  $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === "tab-" + tab));
 
-  const tabs = $("#mobile-tabs");
-  if (tabs) {
-    const items = $$("md-primary-tab", tabs);
-    const idx = items.findIndex((t) => t.dataset.tab === tab);
-    if (idx >= 0 && tabs.activeTabIndex !== idx) tabs.activeTabIndex = idx;
-  }
+  const rail = $("#rail");
+  if (rail && rail.value !== tab) rail.value = tab;
+
+  $$("#drawer-list mdui-list-item").forEach((item) => {
+    item.active = item.getAttribute("value") === tab;
+  });
+
+  const drawer = $("#drawer");
+  if (drawer?.open) drawer.open = false;
 
   if (tab === "login") loadAccounts();
   if (tab === "events") loadEvents();
@@ -89,17 +182,19 @@ function switchTab(tab) {
   }
 }
 
-$$(".rail-item").forEach((btn) => {
-  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
-});
-
-const mobileTabs = $("#mobile-tabs");
-if (mobileTabs) {
-  mobileTabs.addEventListener("change", () => {
-    const tab = mobileTabs.activeTab?.dataset?.tab;
-    if (tab) switchTab(tab);
-  });
+function onNavChange(el) {
+  const v = el?.value;
+  if (v && v !== currentTab) switchTab(v);
 }
+
+$("#rail")?.addEventListener("change", () => onNavChange($("#rail")));
+$("#btn-menu")?.addEventListener("click", () => {
+  const drawer = $("#drawer");
+  if (drawer) drawer.open = !drawer.open;
+});
+$$("#drawer-list mdui-list-item").forEach((item) => {
+  item.addEventListener("click", () => switchTab(item.getAttribute("value")));
+});
 
 /* ---------- meta ---------- */
 async function loadMeta() {
@@ -108,17 +203,15 @@ async function loadMeta() {
     $("#hdr-version").textContent = metaCache.version || "dev";
     const authOn = !!metaCache.web_auth_enabled;
     const pill = $("#auth-pill");
+    const logoutBtn = $("#btn-logout");
     if (authOn) {
-      if (getToken()) {
-        pill.textContent = "鉴权: 已填 Token";
-        pill.className = "chip ok";
-      } else {
-        pill.textContent = "鉴权: 需要 Token";
-        pill.className = "chip warn";
-      }
+      pill.textContent = "鉴权: 已登录";
+      pill.className = "chip ok";
+      logoutBtn?.classList.remove("hidden");
     } else {
       pill.textContent = "鉴权: 关闭";
       pill.className = "chip";
+      logoutBtn?.classList.add("hidden");
     }
 
     const runtime = $("#runtime-meta");
@@ -139,19 +232,6 @@ async function loadMeta() {
       });
     }
 
-    const feats = metaCache.features || {};
-    const fm = $("#feature-matrix");
-    if (fm) {
-      fm.innerHTML = Object.keys(featureLabels)
-        .map((k) => {
-          const on = !!feats[k];
-          return `<div class="feature ${on ? "on" : "off"}"><span class="dot"></span>${esc(
-            featureLabels[k]
-          )}<em>${on ? "支持" : "未支持"}</em></div>`;
-        })
-        .join("");
-    }
-
     const vb = $("#version-box");
     if (vb) {
       vb.innerHTML = kvHTML({
@@ -169,6 +249,10 @@ async function loadMeta() {
       pill.textContent = "鉴权: " + e.message;
       pill.className = "chip warn";
     }
+    if (e.message === "unauthorized" || /unauthor/i.test(e.message)) {
+      clearToken();
+      showAuthGate($("#hdr-version")?.textContent || "—");
+    }
   }
 }
 
@@ -178,14 +262,8 @@ async function loadOverview(quiet = false) {
   const w = ov.workers || {};
   const t = ov.tasks || {};
   $("#overview-cards").innerHTML = [
-    ["Workers", w.total],
-    ["Idle", w.idle],
-    ["Working", w.working],
-    ["Risking", w.risking],
-    ["Tasks", t.total],
-    ["Pending", t.pending],
-    ["Doing", t.doing],
-    ["Done", t.done],
+    ["Workers", w.total], ["Idle", w.idle], ["Working", w.working], ["Risking", w.risking],
+    ["Tasks", t.total], ["Pending", t.pending], ["Doing", t.doing], ["Done", t.done],
   ]
     .map(
       ([label, value]) =>
@@ -244,9 +322,9 @@ async function loadTasks(quiet = false) {
         <td>${fmtTime(t.updated_at)}</td>
         <td>
           <div class="action-row">
-            <md-text-button data-act="requeue" data-id="${esc(t.id)}">重入队</md-text-button>
-            <md-text-button data-act="view" data-id="${esc(t.id)}">查看</md-text-button>
-            <md-text-button data-act="del" data-id="${esc(t.id)}">删除</md-text-button>
+            <mdui-button variant="text" data-act="requeue" data-id="${esc(t.id)}">重入队</mdui-button>
+            <mdui-button variant="text" data-act="view" data-id="${esc(t.id)}">查看</mdui-button>
+            <mdui-button variant="text" data-act="del" data-id="${esc(t.id)}">删除</mdui-button>
           </div>
         </td>
       </tr>`
@@ -261,13 +339,12 @@ async function loadTasks(quiet = false) {
           await api("/api/v1/tasks/" + id + "/requeue", { method: "POST" });
           toast("已重入队");
         } else if (btn.dataset.act === "del") {
-          const ok = await confirmDialog({ title: "删除任务", message: "确认删除该任务？", okText: "删除", danger: true });
+          const ok = await confirmDialog({ title: "删除任务", message: "确认删除该任务？", okText: "删除" });
           if (!ok) return;
           const delFile = await confirmDialog({
             title: "删除磁盘文件",
             message: "是否同时删除磁盘上的 JSON 配置文件？",
             okText: "删除文件",
-            danger: true,
           });
           await api("/api/v1/tasks/" + id + "?delete_file=" + (delFile ? "true" : "false"), { method: "DELETE" });
           toast("已删除");
@@ -289,19 +366,87 @@ async function loadTasks(quiet = false) {
 
 async function loadConfigs() {
   const list = await api("/api/v1/configs");
+  const all = $("#cfg-select-all");
+  if (all) all.checked = false;
   $("#configs-table tbody").innerHTML =
     (list || [])
-      .map(
-        (c) => `
+      .map((c) => {
+        const queued = !!c.has_task;
+        const check = queued
+          ? `<input type="checkbox" disabled title="已在任务队列" />`
+          : `<input type="checkbox" class="cfg-pick" data-name="${esc(c.name)}" />`;
+        const act = queued
+          ? `<span class="muted">已入队</span>`
+          : `<mdui-button variant="text" class="cfg-enqueue-one" data-name="${esc(c.name)}">入队</mdui-button>`;
+        return `
       <tr>
-        <td>${esc(c.name)}.json</td>
+        <td>${check}</td>
+        <td><code>${esc(c.name)}.json</code></td>
         <td>${c.size}</td>
-        <td>${c.has_task ? badge(c.task_status) : "-"}</td>
+        <td>${queued ? badge(c.task_status) : '<span class="muted">未入队</span>'}</td>
         <td>${fmtTime(c.mod_time)}</td>
-      </tr>`
-      )
-      .join("") || emptyRow(4, "目录为空");
+        <td>${act}</td>
+      </tr>`;
+      })
+      .join("") || emptyRow(6, "目录为空");
+
+  $$("#configs-table .cfg-enqueue-one").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.name;
+      if (!name) return;
+      try {
+        const res = await api("/api/v1/tasks/reload", {
+          method: "POST",
+          body: JSON.stringify({ names: [name] }),
+        });
+        toast("已入队 " + (res.added || 0) + " 个");
+        await refreshAll();
+      } catch (e) {
+        apiError(e);
+      }
+    });
+  });
 }
+
+function selectedConfigNames() {
+  return $$("#configs-table .cfg-pick:checked")
+    .map((el) => el.dataset.name)
+    .filter(Boolean);
+}
+
+$("#cfg-select-all")?.addEventListener("change", () => {
+  const on = !!$("#cfg-select-all")?.checked;
+  $$("#configs-table .cfg-pick").forEach((el) => {
+    el.checked = on;
+  });
+});
+
+$("#btn-configs-refresh")?.addEventListener("click", async () => {
+  try {
+    await loadConfigs();
+    toast("列表已刷新");
+  } catch (e) {
+    apiError(e);
+  }
+});
+
+$("#btn-configs-enqueue")?.addEventListener("click", async () => {
+  const names = selectedConfigNames();
+  if (!names.length) {
+    toast("请先勾选要入队的配置", { error: true });
+    return;
+  }
+  try {
+    const res = await api("/api/v1/tasks/reload", {
+      method: "POST",
+      body: JSON.stringify({ names }),
+    });
+    toast("已入队 " + (res.added || 0) + " 个任务");
+    await refreshAll();
+  } catch (e) {
+    apiError(e);
+  }
+});
 
 /* ---------- events ---------- */
 async function loadEvents() {
@@ -333,14 +478,14 @@ function renderEvents() {
         ${esc(e.message)}
       </div>`
       )
-      .join("") || `<div class="empty-state"><span class="material-symbols-outlined">inbox</span>暂无事件</div>`;
+      .join("") || `<div class="empty-state">暂无事件</div>`;
 }
 
 $("#event-level")?.addEventListener("change", renderEvents);
 $("#event-filter")?.addEventListener("input", renderEvents);
 $("#btn-events-refresh")?.addEventListener("click", loadEvents);
 $("#btn-events-clear")?.addEventListener("click", async () => {
-  const ok = await confirmDialog({ title: "清空事件", message: "清空 master 事件缓冲？", okText: "清空", danger: true });
+  const ok = await confirmDialog({ title: "清空事件", message: "清空 master 事件缓冲？", okText: "清空" });
   if (!ok) return;
   try {
     await api("/api/v1/events/clear", { method: "POST" });
@@ -369,15 +514,14 @@ async function loadAccounts() {
         <div class="actions">
           ${
             a.uid !== active
-              ? `<md-outlined-button data-act="act" data-uid="${esc(a.uid)}">启用</md-outlined-button>`
+              ? `<mdui-button variant="outlined" data-act="act" data-uid="${esc(a.uid)}">启用</mdui-button>`
               : ""
           }
-          <md-text-button data-act="del" data-uid="${esc(a.uid)}">删除</md-text-button>
+          <mdui-button variant="text" data-act="del" data-uid="${esc(a.uid)}">删除</mdui-button>
         </div>
       </div>`
         )
-        .join("") ||
-      `<div class="empty-state"><span class="material-symbols-outlined">person_off</span>尚未登录账号</div>`;
+        .join("") || `<div class="empty-state">尚未登录账号</div>`;
 
     $("#account-list").querySelectorAll("[data-act]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -390,7 +534,6 @@ async function loadAccounts() {
               title: "删除账号",
               message: "删除该账号本地 cookie？",
               okText: "删除",
-              danger: true,
             });
             if (!ok) return;
             await api("/api/v1/auth/accounts/" + btn.dataset.uid, { method: "DELETE" });
@@ -417,7 +560,10 @@ $("#btn-qr")?.addEventListener("click", async () => {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
-        const p = await api("/api/v1/auth/qr/poll?qrcode_key=" + encodeURIComponent(res.qrcode_key), { quiet: true });
+        const p = await api(
+          "/api/v1/auth/qr/poll?qrcode_key=" + encodeURIComponent(res.qrcode_key),
+          { quiet: true }
+        );
         if (p.code === 0) {
           clearInterval(pollTimer);
           $("#qr-status").textContent = "登录成功: " + (p.username || p.uid);
@@ -546,14 +692,14 @@ $("#btn-generate")?.addEventListener("click", async () => {
     buyer,
     tel,
     phone: fieldValue($("#cfg-phone")).trim(),
-    start_task: true,
+    start_task: !!$("#cfg-start-task")?.checked,
   };
   try {
     const res = await api("/api/v1/configs/generate", { method: "POST", body: JSON.stringify(body) });
     const box = $("#generate-result");
     box.textContent = JSON.stringify(res, null, 2);
     box.classList.remove("hidden");
-    toast("已生成并入队");
+    toast(res.queued ? "已生成并入队" : "已保存配置（未入队）");
     await refreshAll();
   } catch (e) {
     apiError(e);
@@ -561,6 +707,15 @@ $("#btn-generate")?.addEventListener("click", async () => {
 });
 
 /* ---------- tasks upload ---------- */
+function updateUploadLabel() {
+  const input = $("#upload-files");
+  const label = $("#upload-files-label");
+  if (!input || !label) return;
+  const files = [...(input.files || [])];
+  label.value = files.length ? files.map((f) => f.name).join(", ") : "";
+}
+$("#btn-pick-files")?.addEventListener("click", () => $("#upload-files")?.click());
+$("#upload-files")?.addEventListener("change", updateUploadLabel);
 $("#btn-upload")?.addEventListener("click", async () => {
   const files = $("#upload-files")?.files;
   if (!files?.length) {
@@ -572,16 +727,8 @@ $("#btn-upload")?.addEventListener("click", async () => {
   try {
     const res = await api("/api/v1/tasks", { method: "POST", body: fd });
     toast("已创建: " + JSON.stringify(res.created || res));
-    await refreshAll();
-  } catch (e) {
-    apiError(e);
-  }
-});
-
-$("#btn-reload")?.addEventListener("click", async () => {
-  try {
-    const res = await api("/api/v1/tasks/reload", { method: "POST" });
-    toast("新增 " + (res.added || 0) + " 个任务");
+    if ($("#upload-files")) $("#upload-files").value = "";
+    updateUploadLabel();
     await refreshAll();
   } catch (e) {
     apiError(e);
@@ -602,9 +749,9 @@ function fillWorkerSettingsForm(settings) {
   }
   const warm = $("#enable_warmup");
   if (warm) {
-    if (settings.enable_warmup === false) warm.selected = false;
-    else if (settings.enable_warmup === true) warm.selected = true;
-    else warm.selected = true;
+    if (settings.enable_warmup === false) warm.checked = false;
+    else if (settings.enable_warmup === true) warm.checked = true;
+    else warm.checked = true;
   }
 }
 
@@ -625,7 +772,7 @@ function collectWorkerSettings() {
     }
   }
   const warm = $("#enable_warmup");
-  if (warm) s.enable_warmup = !!warm.selected;
+  if (warm) s.enable_warmup = !!warm.checked;
   return s;
 }
 
@@ -681,23 +828,4 @@ $("#btn-refresh")?.addEventListener("click", () => {
   refreshAll().then(() => toast("已刷新"));
 });
 
-// External link buttons that use md-*-button with href
-["link-releases", "link-repo", "link-buy"].forEach((id) => {
-  const el = $("#" + id);
-  if (!el) return;
-  el.addEventListener("click", (e) => {
-    const href = el.getAttribute("href");
-    if (href) {
-      e.preventDefault();
-      window.open(href, "_blank", "noopener");
-    }
-  });
-});
-
-refreshAll();
-setInterval(() => {
-  if (currentTab !== "cluster" && currentTab !== "tasks") return;
-  loadOverview(true).catch(() => {});
-  loadWorkers(true).catch(() => {});
-  loadTasks(true).catch(() => {});
-}, 3000);
+bootstrap();

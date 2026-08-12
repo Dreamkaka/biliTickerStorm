@@ -1,112 +1,86 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" class="mdui-theme-dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BiliTickerStorm</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0..1,0&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles/tokens.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/mdui@2/mdui.css" />
   <link rel="stylesheet" href="/styles/app.css" />
-  <script type="module" src="/vendor/material/material-web.js"></script>
+  <script src="https://unpkg.com/mdui@2/mdui.global.js"></script>
 </head>
 <body>
-  <div class="loading-bar" id="loading-bar">
-    <md-linear-progress indeterminate></md-linear-progress>
+  <mdui-linear-progress id="loading-bar" class="loading-bar hidden" indeterminate></mdui-linear-progress>
+
+  <!-- 鉴权门：仅当 master 配置了 WEB_TOKEN 时显示 -->
+  <div id="auth-gate" class="auth-gate hidden">
+    <mdui-card variant="elevated" class="auth-card">
+      <div class="auth-card-head">
+        <mdui-icon name="lock" class="auth-lock-icon"></mdui-icon>
+        <h1 class="mdui-typescale-headline-small">BiliTickerStorm</h1>
+        <p class="muted">已启用 WEB_TOKEN，请输入令牌进入控制台</p>
+      </div>
+      <mdui-text-field
+        id="auth-token"
+        label="WEB_TOKEN"
+        type="password"
+        variant="outlined"
+        clearable
+        autocomplete="off"
+        style="width:100%"
+      ></mdui-text-field>
+      <p id="auth-error" class="auth-error hidden"></p>
+      <mdui-button id="btn-auth-enter" style="width:100%;margin-top:12px" icon="login">进入</mdui-button>
+      <div class="auth-gate-foot">
+        <mdui-button-icon id="btn-theme-gate" icon="light_mode"></mdui-button-icon>
+        <span class="muted" id="auth-gate-version">—</span>
+      </div>
+    </mdui-card>
   </div>
 
-  <div class="shell">
-    <header class="topbar">
-      <div class="topbar-brand">
-        <md-icon-button id="btn-menu" class="hidden" aria-label="菜单">
-          <md-icon>menu</md-icon>
-        </md-icon-button>
-        <div class="title-block">
-          <h1>BiliTickerStorm <span class="chip info" id="hdr-version">—</span></h1>
-          <p class="subtitle">Master 调度 · Worker 执行 · Material Design 3</p>
-        </div>
-      </div>
+  <mdui-layout id="app-shell" full-height class="hidden">
+    <mdui-top-app-bar scroll-behavior="elevate">
+      <mdui-button-icon icon="menu" id="btn-menu" class="mobile-only"></mdui-button-icon>
+      <mdui-top-app-bar-title>
+        BiliTickerStorm
+        <span class="chip info" id="hdr-version">—</span>
+      </mdui-top-app-bar-title>
       <div class="topbar-actions">
-        <span id="auth-pill" class="chip">鉴权: 检测中</span>
-        <md-outlined-text-field
-          id="token"
-          class="token-field"
-          label="WEB_TOKEN"
-          type="password"
-          autocomplete="off"
-        ></md-outlined-text-field>
-        <md-icon-button id="btn-theme" aria-label="切换主题">
-          <md-icon id="theme-icon">light_mode</md-icon>
-        </md-icon-button>
-        <md-filled-tonal-button id="btn-refresh">
-          <md-icon slot="icon">refresh</md-icon>
-          刷新
-        </md-filled-tonal-button>
+        <span id="auth-pill" class="chip">鉴权: —</span>
+        <mdui-button-icon id="btn-logout" icon="logout" title="退出鉴权" class="hidden"></mdui-button-icon>
+        <mdui-button-icon id="btn-theme" icon="light_mode"></mdui-button-icon>
+        <mdui-button id="btn-refresh" variant="tonal" icon="refresh">刷新</mdui-button>
       </div>
-    </header>
+    </mdui-top-app-bar>
 
-    <nav class="rail" id="rail" aria-label="主导航">
-      <button type="button" class="rail-item active" data-tab="cluster">
-        <span class="material-symbols-outlined">dashboard</span>
-        <span class="label">集群看板</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="login">
-        <span class="material-symbols-outlined">qr_code_2</span>
-        <span class="label">账号登录</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="config">
-        <span class="material-symbols-outlined">tune</span>
-        <span class="label">生成配置</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="tasks">
-        <span class="material-symbols-outlined">task_alt</span>
-        <span class="label">操作任务</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="settings">
-        <span class="material-symbols-outlined">settings</span>
-        <span class="label">高级设置</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="update">
-        <span class="material-symbols-outlined">system_update</span>
-        <span class="label">版本更新</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="events">
-        <span class="material-symbols-outlined">receipt_long</span>
-        <span class="label">事件日志</span>
-      </button>
-      <button type="button" class="rail-item" data-tab="guide">
-        <span class="material-symbols-outlined">help</span>
-        <span class="label">说明</span>
-      </button>
-    </nav>
+    <mdui-navigation-rail id="rail" value="cluster" placement="left" divider alignment="start">
+      <mdui-navigation-rail-item value="cluster" icon="dashboard">集群看板</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="login" icon="qr_code">账号登录</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="config" icon="tune">生成配置</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="tasks" icon="assignment">操作任务</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="settings" icon="settings">高级设置</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="update" icon="system_update">版本更新</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="events" icon="event_note">事件日志</mdui-navigation-rail-item>
+      <mdui-navigation-rail-item value="guide" icon="help_outline">说明</mdui-navigation-rail-item>
+    </mdui-navigation-rail>
 
-    <div class="mobile-tabs">
-      <md-tabs id="mobile-tabs">
-        <md-primary-tab data-tab="cluster" active>看板</md-primary-tab>
-        <md-primary-tab data-tab="login">登录</md-primary-tab>
-        <md-primary-tab data-tab="config">配置</md-primary-tab>
-        <md-primary-tab data-tab="tasks">任务</md-primary-tab>
-        <md-primary-tab data-tab="settings">设置</md-primary-tab>
-        <md-primary-tab data-tab="update">版本</md-primary-tab>
-        <md-primary-tab data-tab="events">事件</md-primary-tab>
-        <md-primary-tab data-tab="guide">说明</md-primary-tab>
-      </md-tabs>
-    </div>
-
-    <main class="content">
+    <mdui-layout-main class="content">
+      <div class="content-inner">
       <!-- cluster -->
       <section id="tab-cluster" class="page active">
         <div class="page-header">
           <div>
-            <h2>集群看板</h2>
-            <p>Worker / Task 状态 · 约 3 秒自动刷新</p>
+            <h2 class="mdui-typescale-headline-small">集群看板</h2>
+            <p class="muted">Worker / Task 状态 · 约 3 秒自动刷新</p>
           </div>
         </div>
         <div class="stat-grid" id="overview-cards"></div>
         <div class="grid-2">
-          <div class="md-card elevated">
-            <div class="md-card-head"><div><h3>Workers</h3></div></div>
+          <mdui-card variant="filled" class="block-card">
+            <div class="card-head"><h3>Workers</h3></div>
             <div class="table-wrap">
               <table class="data" id="workers-table">
                 <thead>
@@ -118,9 +92,9 @@
                 <tbody></tbody>
               </table>
             </div>
-          </div>
-          <div class="md-card elevated">
-            <div class="md-card-head"><div><h3>Tasks</h3></div></div>
+          </mdui-card>
+          <mdui-card variant="filled" class="block-card">
+            <div class="card-head"><h3>Tasks</h3></div>
             <div class="table-wrap">
               <table class="data" id="tasks-mini">
                 <thead>
@@ -129,7 +103,7 @@
                 <tbody></tbody>
               </table>
             </div>
-          </div>
+          </mdui-card>
         </div>
       </section>
 
@@ -137,52 +111,49 @@
       <section id="tab-login" class="page">
         <div class="page-header">
           <div>
-            <h2>账号登录</h2>
-            <p>扫码登录 · cookie 保存在 CONFIG_PATH/accounts/</p>
+            <h2 class="mdui-typescale-headline-small">账号登录</h2>
+            <p class="muted">扫码登录 · cookie 保存在 CONFIG_PATH/accounts/</p>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="md-card-head">
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
             <div>
               <h3>扫码登录</h3>
-              <p>使用哔哩哔哩 App 扫码</p>
+              <p class="muted">使用哔哩哔哩 App 扫码</p>
             </div>
           </div>
           <div class="row">
-            <md-filled-button id="btn-qr">
-              <md-icon slot="icon">qr_code_scanner</md-icon>
-              生成二维码
-            </md-filled-button>
+            <mdui-button id="btn-qr" icon="qr_code_scanner">生成二维码</mdui-button>
             <span id="qr-status" class="muted"></span>
           </div>
           <div id="qr-box" class="qr-box hidden">
             <img id="qr-img" alt="qrcode" />
           </div>
-        </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>账号列表</h3></div></div>
+        </mdui-card>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head"><h3>账号列表</h3></div>
           <div id="account-list" class="list"></div>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- config -->
       <section id="tab-config" class="page">
         <div class="page-header">
           <div>
-            <h2>生成配置</h2>
-            <p>从会员购项目生成抢票 JSON 并入队</p>
+            <h2 class="mdui-typescale-headline-small">生成配置</h2>
+            <p class="muted">从会员购项目生成抢票 JSON（默认只保存文件，不入队）</p>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="md-card-head">
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
             <div>
               <h3>项目与票档</h3>
-              <p>需先登录；写入 CONFIG_PATH 并创建 Pending 任务</p>
+              <p class="muted">需先登录；写入 CONFIG_PATH。入队请到「任务」上传/重载或勾选下方选项</p>
             </div>
           </div>
           <div class="form-grid">
-            <md-outlined-text-field id="project-id" label="项目 ID / URL" placeholder="例如 102194"></md-outlined-text-field>
-            <md-filled-button id="btn-load-project">加载项目</md-filled-button>
+            <mdui-text-field id="project-id" label="项目 ID / URL" variant="outlined" placeholder="例如 102194"></mdui-text-field>
+            <mdui-button id="btn-load-project">加载项目</mdui-button>
           </div>
           <div id="project-meta" class="muted" style="margin-bottom:12px"></div>
           <div class="form-stack">
@@ -196,46 +167,60 @@
               <select id="addr-options" class="native-select"></select>
             </label>
             <div class="form-grid three">
-              <md-outlined-text-field id="cfg-buyer" label="联系人姓名" required></md-outlined-text-field>
-              <md-outlined-text-field id="cfg-tel" label="联系人电话" required></md-outlined-text-field>
-              <md-outlined-text-field id="cfg-phone" label="手机号 phone"></md-outlined-text-field>
+              <mdui-text-field id="cfg-buyer" label="联系人姓名" variant="outlined" required></mdui-text-field>
+              <mdui-text-field id="cfg-tel" label="联系人电话" variant="outlined" required></mdui-text-field>
+              <mdui-text-field id="cfg-phone" label="手机号 phone" variant="outlined"></mdui-text-field>
             </div>
             <div class="form-grid three">
-              <md-outlined-text-field id="cfg-count" label="数量（自动）" type="number" value="0" readonly></md-outlined-text-field>
-              <md-outlined-text-field id="cfg-name" label="配置文件名" placeholder="默认用 detail"></md-outlined-text-field>
-              <md-outlined-text-field id="cfg-sale-start" label="起售 sale_start" readonly></md-outlined-text-field>
+              <mdui-text-field id="cfg-count" label="数量（自动）" variant="outlined" type="number" value="0" readonly></mdui-text-field>
+              <mdui-text-field id="cfg-name" label="配置文件名" variant="outlined" placeholder="默认用 detail"></mdui-text-field>
+              <mdui-text-field id="cfg-sale-start" label="起售 sale_start" variant="outlined" readonly></mdui-text-field>
             </div>
             <p class="muted">配置格式对齐 biliTickerBuy：含 <code>sale_start</code>。Worker：<code>TICKET_TIME_START</code> 优先，否则用配置 <code>sale_start</code>。</p>
-            <md-filled-button id="btn-generate">
-              <md-icon slot="icon">playlist_add</md-icon>
-              生成并入队
-            </md-filled-button>
+            <label class="check-row">
+              <mdui-switch id="cfg-start-task"></mdui-switch>
+              生成后立即入队（Pending）
+            </label>
+            <mdui-button id="btn-generate" icon="save">生成配置</mdui-button>
             <pre id="generate-result" class="code-block hidden"></pre>
           </div>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- tasks -->
       <section id="tab-tasks" class="page">
         <div class="page-header">
           <div>
-            <h2>操作任务</h2>
-            <p>上传 JSON、重入队、删除、目录重载</p>
+            <h2 class="mdui-typescale-headline-small">操作任务</h2>
+            <p class="muted">上传 JSON、重入队、删除；磁盘配置可勾选后入队</p>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>上传配置 JSON</h3></div></div>
-          <div class="row">
-            <label class="field-label" style="flex:1;min-width:200px">
-              选择文件
-              <input type="file" id="upload-files" multiple accept=".json,application/json" />
-            </label>
-            <md-filled-button id="btn-upload">上传并入队</md-filled-button>
-            <md-outlined-button id="btn-reload">从目录重载</md-outlined-button>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
+            <div>
+              <h3>上传配置 JSON</h3>
+              <p class="muted">选择本地 JSON 后上传并入队</p>
+            </div>
           </div>
-        </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>任务列表</h3></div></div>
+          <div class="form-stack">
+            <div class="form-grid">
+              <mdui-text-field
+                id="upload-files-label"
+                label="配置文件"
+                variant="outlined"
+                readonly
+                placeholder="未选择文件"
+              ></mdui-text-field>
+              <mdui-button id="btn-pick-files" variant="tonal" icon="attach_file">选择文件</mdui-button>
+              <input type="file" id="upload-files" class="hidden" multiple accept=".json,application/json" />
+            </div>
+            <div class="action-row">
+              <mdui-button id="btn-upload" icon="upload">上传并入队</mdui-button>
+            </div>
+          </div>
+        </mdui-card>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head"><h3>任务列表</h3></div>
           <div class="table-wrap">
             <table class="data" id="tasks-table">
               <thead>
@@ -247,33 +232,45 @@
               <tbody></tbody>
             </table>
           </div>
-        </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>磁盘配置文件</h3></div></div>
+        </mdui-card>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
+            <div>
+              <h3>磁盘配置文件</h3>
+              <p class="muted">CONFIG_PATH 下的 JSON；勾选后入队，不会自动全部加入队列</p>
+            </div>
+            <div class="action-row">
+              <mdui-button id="btn-configs-refresh" variant="outlined" icon="refresh">刷新列表</mdui-button>
+              <mdui-button id="btn-configs-enqueue" icon="playlist_add">入队所选</mdui-button>
+            </div>
+          </div>
           <div class="table-wrap">
             <table class="data" id="configs-table">
               <thead>
-                <tr><th>文件</th><th>大小</th><th>任务状态</th><th>修改时间</th></tr>
+                <tr>
+                  <th style="width:40px"><input type="checkbox" id="cfg-select-all" title="全选未入队" /></th>
+                  <th>文件</th><th>大小</th><th>任务状态</th><th>修改时间</th><th>操作</th>
+                </tr>
               </thead>
               <tbody></tbody>
             </table>
           </div>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- settings -->
       <section id="tab-settings" class="page">
         <div class="page-header">
           <div>
-            <h2>高级设置</h2>
-            <p>Worker 集群参数 · 写入 worker_settings.json 并经心跳下发</p>
+            <h2 class="mdui-typescale-headline-small">高级设置</h2>
+            <p class="muted">Worker 集群参数 · 写入 worker_settings.json 并经心跳下发</p>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="md-card-head">
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
             <div>
               <h3>Worker 集群设置</h3>
-              <p>部署级变量仍用 compose/helm：<code>MASTER_SERVER_ADDR</code> / <code>CONFIG_PATH</code> / <code>WEB_*</code></p>
+              <p class="muted">部署级变量仍用 compose/helm：<code>MASTER_SERVER_ADDR</code> / <code>CONFIG_PATH</code> / <code>WEB_*</code></p>
             </div>
           </div>
           <p class="muted" id="ws-meta">version: -</p>
@@ -319,96 +316,89 @@
                 <label class="field-label">ConnPerHost <input class="native-input" name="conn_per_host" type="number" min="1" max="32" placeholder="4" /></label>
                 <label class="field-label">Create 批大小 <input class="native-input" name="create_batch_size" type="number" min="1" max="32" placeholder="2" /></label>
                 <label class="check-row">
-                  <md-switch id="enable_warmup" name="enable_warmup" selected></md-switch>
+                  <mdui-switch id="enable_warmup" checked></mdui-switch>
                   启用连接预热
                 </label>
               </div>
             </fieldset>
             <div class="action-row" style="margin-top:8px">
-              <md-filled-button type="submit" id="btn-ws-save">保存并下发</md-filled-button>
-              <md-outlined-button type="button" id="btn-ws-reload">重新加载</md-outlined-button>
-              <md-text-button type="button" id="btn-ws-export">导出 .env</md-text-button>
+              <mdui-button type="submit" id="btn-ws-save">保存并下发</mdui-button>
+              <mdui-button type="button" id="btn-ws-reload" variant="outlined">重新加载</mdui-button>
+              <mdui-button type="button" id="btn-ws-export" variant="text">导出 .env</mdui-button>
             </div>
             <pre id="ws-export" class="code-block hidden"></pre>
           </form>
-        </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>运行时参数（只读）</h3><p>来自 master 进程</p></div></div>
+        </mdui-card>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head">
+            <div>
+              <h3>运行时参数（只读）</h3>
+              <p class="muted">来自 master 进程</p>
+            </div>
+          </div>
           <div id="runtime-meta" class="kv"></div>
-        </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>功能矩阵</h3></div></div>
-          <div id="feature-matrix" class="feature-grid"></div>
-        </div>
-        <div class="md-card">
-          <div class="md-card-head"><div><h3>说明</h3></div></div>
+        </mdui-card>
+        <mdui-card variant="outlined" class="block-card">
+          <div class="card-head"><h3>说明</h3></div>
           <p class="muted">密钥字段脱敏显示；保存时若仍为脱敏值则保留原密钥。Worker 在心跳时拉取最新配置（通常数秒内生效）。</p>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- update -->
       <section id="tab-update" class="page">
         <div class="page-header">
           <div>
-            <h2>版本更新</h2>
-            <p>当前构建信息与发布渠道</p>
+            <h2 class="mdui-typescale-headline-small">版本更新</h2>
+            <p class="muted">当前构建信息与发布渠道</p>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="md-card-head"><div><h3>当前版本</h3></div></div>
+        <mdui-card variant="filled" class="block-card">
+          <div class="card-head"><h3>当前版本</h3></div>
           <div id="version-box" class="kv"></div>
           <div class="action-row" style="margin-top:16px">
-            <md-filled-button id="link-releases" href="https://github.com/mikumifa/biliTickerStorm/releases" target="_blank" rel="noopener">
-              GitHub Releases
-            </md-filled-button>
-            <md-outlined-button id="link-repo" href="https://github.com/mikumifa/biliTickerStorm" target="_blank" rel="noopener">
-              仓库
-            </md-outlined-button>
-            <md-outlined-button id="link-buy" href="https://github.com/mikumifa/biliTickerBuy" target="_blank" rel="noopener">
-              biliTickerBuy
-            </md-outlined-button>
+            <mdui-button id="link-releases" href="https://github.com/mikumifa/biliTickerStorm/releases" target="_blank">GitHub Releases</mdui-button>
+            <mdui-button id="link-repo" variant="outlined" href="https://github.com/mikumifa/biliTickerStorm" target="_blank">仓库</mdui-button>
+            <mdui-button id="link-buy" variant="outlined" href="https://github.com/mikumifa/biliTickerBuy" target="_blank">biliTickerBuy</mdui-button>
           </div>
           <p class="muted" style="margin-top:12px">集群以 Docker 镜像 / Helm chart 升级。镜像：<code>mikumifa/bili-ticker-storm-*</code>，tag 建议用 <code>v*</code>。</p>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- events -->
       <section id="tab-events" class="page">
         <div class="page-header">
           <div>
-            <h2>事件日志</h2>
-            <p>Master 调度 / 风控 / 任务变更（环形缓冲）</p>
+            <h2 class="mdui-typescale-headline-small">事件日志</h2>
+            <p class="muted">Master 调度 / 风控 / 任务变更（环形缓冲）</p>
           </div>
           <div class="action-row">
-            <md-outlined-button id="btn-events-refresh">刷新</md-outlined-button>
-            <md-text-button id="btn-events-clear">清空</md-text-button>
+            <mdui-button id="btn-events-refresh" variant="outlined">刷新</mdui-button>
+            <mdui-button id="btn-events-clear" variant="text">清空</mdui-button>
           </div>
         </div>
-        <div class="md-card elevated">
-          <div class="row">
-            <label class="field-label" style="min-width:140px">级别
-              <select id="event-level" class="native-select">
-                <option value="">全部</option>
-                <option value="info">info</option>
-                <option value="warn">warn</option>
-                <option value="error">error</option>
-              </select>
-            </label>
-            <md-outlined-text-field id="event-filter" label="关键词" style="flex:1;min-width:180px"></md-outlined-text-field>
+        <mdui-card variant="filled" class="block-card">
+          <div class="form-grid">
+            <mdui-select id="event-level" label="级别" variant="outlined" value="">
+              <mdui-menu-item value="">全部</mdui-menu-item>
+              <mdui-menu-item value="info">info</mdui-menu-item>
+              <mdui-menu-item value="warn">warn</mdui-menu-item>
+              <mdui-menu-item value="error">error</mdui-menu-item>
+            </mdui-select>
+            <mdui-text-field id="event-filter" label="关键词" variant="outlined"></mdui-text-field>
           </div>
           <div id="events-list" class="events"></div>
-        </div>
+        </mdui-card>
       </section>
 
       <!-- guide -->
       <section id="tab-guide" class="page">
         <div class="page-header">
           <div>
-            <h2>使用说明</h2>
-            <p>快速上手 BiliTickerStorm 控制台</p>
+            <h2 class="mdui-typescale-headline-small">使用说明</h2>
+            <p class="muted">快速上手 BiliTickerStorm 控制台</p>
           </div>
         </div>
-        <div class="md-card elevated guide">
+        <mdui-card variant="filled" class="block-card guide">
           <ol>
             <li>本页「账号登录 + 生成配置」或 biliTickerBuy 产出 JSON → master <code>CONFIG_PATH</code>。</li>
             <li>启动 worker（<code>MASTER_SERVER_ADDR</code>）；Idle 后自动 PushTask。可选 <code>PROXY_LIST</code>。</li>
@@ -420,34 +410,26 @@
             <a href="https://github.com/mikumifa/biliTickerStorm" target="_blank" rel="noopener">Storm</a> ·
             <a href="https://github.com/mikumifa/biliTickerBuy" target="_blank" rel="noopener">Buy</a>
           </p>
-        </div>
+        </mdui-card>
       </section>
-    </main>
-  </div>
+      </div>
+    </mdui-layout-main>
+  </mdui-layout>
 
-  <div class="snackbar-host" id="snackbar-host"></div>
-
-  <md-dialog id="confirm-dialog">
-    <div slot="headline" id="confirm-title">确认</div>
-    <form slot="content" id="confirm-form" method="dialog">
-      <p id="confirm-message" style="margin:0;color:var(--md-sys-color-on-surface-variant)"></p>
-    </form>
-    <div slot="actions">
-      <md-text-button id="confirm-cancel" value="cancel">取消</md-text-button>
-      <md-filled-button id="confirm-ok" value="ok">确定</md-filled-button>
-    </div>
-  </md-dialog>
-
-  <md-dialog id="view-dialog">
-    <div slot="headline" id="view-title">详情</div>
-    <div slot="content">
-      <pre class="dialog-body" id="view-body"></pre>
-    </div>
-    <div slot="actions">
-      <md-filled-button id="view-close">关闭</md-filled-button>
-    </div>
-  </md-dialog>
+  <mdui-navigation-drawer id="drawer" close-on-overlay-click>
+    <mdui-list id="drawer-list">
+      <mdui-list-item active rounded value="cluster" icon="dashboard">集群看板</mdui-list-item>
+      <mdui-list-item rounded value="login" icon="qr_code">账号登录</mdui-list-item>
+      <mdui-list-item rounded value="config" icon="tune">生成配置</mdui-list-item>
+      <mdui-list-item rounded value="tasks" icon="assignment">操作任务</mdui-list-item>
+      <mdui-list-item rounded value="settings" icon="settings">高级设置</mdui-list-item>
+      <mdui-list-item rounded value="update" icon="system_update">版本更新</mdui-list-item>
+      <mdui-list-item rounded value="events" icon="event_note">事件日志</mdui-list-item>
+      <mdui-list-item rounded value="guide" icon="help_outline">说明</mdui-list-item>
+    </mdui-list>
+  </mdui-navigation-drawer>
 
   <script type="module" src="/js/app.js"></script>
 </body>
 </html>
+

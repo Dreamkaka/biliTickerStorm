@@ -243,7 +243,41 @@ func isReservedConfigFile(filename string) bool {
 	return ok
 }
 
-// AddTaskFromJSONBytes 原样写入 JSON 字节（保持 Buy 字段顺序与 cookies 形态）
+// WriteTaskConfigFile 仅写入 CONFIG_PATH 下的抢票 JSON，不创建/入队任务。
+// 返回清理后的任务名与相对文件名（name.json）。
+func (s *Server) WriteTaskConfigFile(name string, content []byte) (string, string, error) {
+	name, path, err := s.writeTaskConfigFile(name, content)
+	if err != nil {
+		return "", "", err
+	}
+	s.PushEvent("info", fmt.Sprintf("已保存配置文件（未入队）: %s", path))
+	return name, path, nil
+}
+
+func (s *Server) writeTaskConfigFile(name string, content []byte) (string, string, error) {
+	name = sanitizeTaskName(name)
+	if name == "" {
+		name = fmt.Sprintf("task-%d", time.Now().Unix())
+	}
+	if isReservedConfigFile(name + ".json") {
+		return "", "", fmt.Errorf("名称 %q 为系统保留配置，不能作为抢票任务", name)
+	}
+	var probe map[string]interface{}
+	if err := json.Unmarshal(content, &probe); err != nil {
+		return "", "", fmt.Errorf("invalid json: %w", err)
+	}
+	if err := os.MkdirAll(Cfg.Configpath, 0o755); err != nil {
+		return "", "", err
+	}
+	rel := name + ".json"
+	path := filepath.Join(Cfg.Configpath, rel)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return "", "", err
+	}
+	return name, rel, nil
+}
+
+// AddTaskFromJSONBytes 原样写入 JSON 字节（保持 Buy 字段顺序与 cookies 形态）并入队
 func (s *Server) AddTaskFromJSONBytes(name string, content []byte, writeFile bool) (*TaskInfo, error) {
 	name = sanitizeTaskName(name)
 	if name == "" {
@@ -258,11 +292,9 @@ func (s *Server) AddTaskFromJSONBytes(name string, content []byte, writeFile boo
 	}
 	text := string(content)
 	if writeFile {
-		path := filepath.Join(Cfg.Configpath, name+".json")
-		if err := os.MkdirAll(Cfg.Configpath, 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(path, content, 0o600); err != nil {
+		var err error
+		name, _, err = s.writeTaskConfigFile(name, content)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -339,29 +371,22 @@ func (s *Server) RequeueTask(taskID string) error {
 	return nil
 }
 
-func (s *Server) ReloadTasksFromDir() (int, error) {
-	files, err := os.ReadDir(Cfg.Configpath)
-	if err != nil {
-		return 0, err
+// EnqueueConfigFiles 按名称从 CONFIG_PATH 读取 JSON 并入队；已存在同名任务则跳过。
+// names 为空时不入队（避免误把整目录塞进队列）。
+func (s *Server) EnqueueConfigFiles(names []string) (int, error) {
+	if len(names) == 0 {
+		return 0, fmt.Errorf("请选择要入队的配置")
 	}
 	added := 0
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+	for _, raw := range names {
+		name := sanitizeTaskName(raw)
+		if name == "" || isReservedConfigFile(name+".json") {
 			continue
 		}
-		if isReservedConfigFile(file.Name()) {
-			continue
-		}
-		fullPath := filepath.Join(Cfg.Configpath, file.Name())
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			continue
-		}
-		taskName := strings.TrimSuffix(file.Name(), ".json")
 		s.tasksMux.RLock()
 		exists := false
 		for _, t := range s.tasks {
-			if t.TaskName == taskName {
+			if t.TaskName == name {
 				exists = true
 				break
 			}
@@ -370,11 +395,34 @@ func (s *Server) ReloadTasksFromDir() (int, error) {
 		if exists {
 			continue
 		}
-		s.CreateTask(taskName, string(content))
+		content, err := s.ReadConfigFile(name)
+		if err != nil {
+			return added, fmt.Errorf("%s: %w", name, err)
+		}
+		s.CreateTask(name, content)
 		added++
 	}
-	s.PushEvent("info", fmt.Sprintf("从目录重载，新增 %d 个任务", added))
+	s.PushEvent("info", fmt.Sprintf("从目录入队，新增 %d 个任务", added))
 	return added, nil
+}
+
+// ReloadTasksFromDir 兼容旧调用：扫描目录中尚未入队的配置并全部入队。
+// WebUI 已改为先选后入，优先用 EnqueueConfigFiles。
+func (s *Server) ReloadTasksFromDir() (int, error) {
+	list, err := s.ListConfigFiles()
+	if err != nil {
+		return 0, err
+	}
+	names := make([]string, 0)
+	for _, c := range list {
+		if !c.HasTask {
+			names = append(names, c.Name)
+		}
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	return s.EnqueueConfigFiles(names)
 }
 
 func (s *Server) ListConfigFiles() ([]ConfigFileView, error) {

@@ -112,7 +112,8 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 			continue
 		}
 		code := getIntFromMap(requestResult, "errno", "code")
-		log.Infof("订单准备结果: errno=%d msg=%s", code, errnoMessage(code))
+		apiMsg := getStringFromMap(requestResult, "msg", "message")
+		log.Infof("订单准备结果: errno=%d msg=%s api=%s", code, errnoMessage(code), apiMsg)
 		if code == -401 || code == errnoCaptcha {
 			log.Warn("prepare 返回人机验证/风险态，继续重试（已移除极验依赖）")
 			if w.m != nil {
@@ -123,7 +124,9 @@ func (w *Worker) Buy(ctx context.Context, ticketsInfo BiliTickerBuyConfig, timeS
 		}
 		orderToken := extractPrepareToken(requestResult)
 		if orderToken == "" {
-			log.Info("重新准备订单，原因：订单准备未返回有效 token")
+			// 对齐 biliTickerBuy：无 data.token 则 reprepare（常见：未开售/无库存/登录异常等 errno≠0）
+			log.Infof("重新准备订单，原因：订单准备未返回有效 token (errno=%d %s api=%q)", code, errnoMessage(code), apiMsg)
+			time.Sleep(time.Duration(interval) * time.Millisecond)
 			continue
 		}
 		ticketsInfo.Token = orderToken

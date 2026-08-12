@@ -1,15 +1,27 @@
 import { toast, setLoading } from "./ui.js";
 
+/** 内存中的 token；鉴权门写入，getToken 优先读它 */
+let memoryToken = (localStorage.getItem("bts_token") || "").trim();
+
 export function getToken() {
-  const el = document.getElementById("token");
-  const fromField = el && "value" in el ? String(el.value || "").trim() : "";
-  return fromField || (localStorage.getItem("bts_token") || "").trim();
+  return memoryToken || (localStorage.getItem("bts_token") || "").trim();
+}
+
+export function setToken(t) {
+  memoryToken = String(t || "").trim();
+  if (memoryToken) localStorage.setItem("bts_token", memoryToken);
+  else localStorage.removeItem("bts_token");
+}
+
+export function clearToken() {
+  memoryToken = "";
+  localStorage.removeItem("bts_token");
 }
 
 export async function api(path, opts = {}) {
-  const { quiet, headers: optHeaders, ...fetchOpts } = opts;
+  const { quiet, headers: optHeaders, token: overrideToken, ...fetchOpts } = opts;
   const headers = Object.assign({}, optHeaders || {});
-  const t = getToken();
+  const t = overrideToken != null ? String(overrideToken).trim() : getToken();
   if (t) headers["Authorization"] = "Bearer " + t;
   if (fetchOpts.body && !(fetchOpts.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";

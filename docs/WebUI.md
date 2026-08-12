@@ -55,19 +55,20 @@ kubectl port-forward svc/ticket-master 8080:8080
 
 ## 鉴权
 
-| 场景 | 建议 |
+| 场景 | 行为 |
 |------|------|
-| 本机仅 127.0.0.1 | `WEB_TOKEN` 可空 |
-| Compose/K8s 暴露端口 | 设置 `WEB_TOKEN`，控制台右上角填入；API：`Authorization: Bearer <token>` |
+| 未设置 `WEB_TOKEN` | 跳过鉴权页，直接进入控制台 |
+| 已设置 `WEB_TOKEN` | 先显示独立鉴权页，校验通过后进入主页；Token 存 `localStorage.bts_token` |
+| API | `Authorization: Bearer <token>` 或 `?token=` |
 
-`GET /api/v1/health` 始终无需鉴权。
+`GET /api/v1/health` 始终无需鉴权。主页顶栏「退出」可清除 Token 回到鉴权页。
 
-## UI（Material Design 3）
+## UI（MDUI · Material Design 3）
 
-- 技术：原生 ES Module + [@material/web](https://github.com/material-components/material-web)（已 vendor 于 `internal/master/web/static/vendor/material/`，**零前端构建**）
-- 布局：顶栏 + 宽屏 Navigation rail / 窄屏 Tabs；MD3 色板（默认深色，可切换浅色，`localStorage.bts_theme`）
-- 反馈：Snackbar、确认/详情 Dialog、顶栏加载条（替代原生 `alert`/`confirm`）
-- 静态资源：`//go:embed all:static` 打入 master 二进制
+- 技术：原生 ES Module + [MDUI 2](https://www.mdui.org/)（CDN：`unpkg.com/mdui@2`，**零前端构建、无本地 UI 库 vendor**）
+- 布局：`mdui-layout` + Top app bar + Navigation rail（窄屏 Drawer / Tabs）；默认深色，可切换浅色（`localStorage.bts_theme` + `mdui.setTheme`）
+- 反馈：`mdui.snackbar` / `mdui.confirm` / `mdui.dialog`、顶栏加载条
+- 业务静态资源：`//go:embed all:static` 打入 master；需浏览器能访问 unpkg（或自行改 CDN）
 
 ## 页面导航
 
@@ -77,7 +78,7 @@ kubectl port-forward svc/ticket-master 8080:8080
 | 账号登录 | 扫码登录，账号存 `CONFIG_PATH/accounts/` |
 | 生成配置 | 项目/票档/购票人 → JSON 落盘并入队 |
 | 操作任务 | 上传 JSON、重入队、删除、目录重载 |
-| 高级设置 | **Worker 集群设置**（通知/代理/风控/连接，写入 `worker_settings.json` 并心跳下发）、运行时参数、功能矩阵 |
+| 高级设置 | **Worker 集群设置**（通知/代理/风控/连接，写入 `worker_settings.json` 并心跳下发）、运行时参数 |
 | 版本更新 | 版本号与 GitHub Releases 链接 |
 | 事件日志 | Master 调度/风控事件（可过滤/清空） |
 | 说明 | 使用步骤 |
@@ -98,9 +99,11 @@ kubectl port-forward svc/ticket-master 8080:8080
 - `GET /api/v1/overview` · `/workers` · `/tasks` · `/events`  
 - `POST /api/v1/tasks` — JSON 或 multipart 上传  
 - `POST /api/v1/tasks/{id}/requeue` · `DELETE /api/v1/tasks/{id}`  
-- `POST /api/v1/tasks/reload`  
+- `POST /api/v1/tasks/reload` — body `{"names":["a"]}` 入队所选；`{"all":true}` 整目录未入队文件  
+
 - `POST /api/v1/auth/qr/start` · `GET /api/v1/auth/qr/poll`  
-- `POST /api/v1/configs/generate`  
+- `POST /api/v1/configs/generate` — 默认只写盘；`start_task: true` 时才入队  
+
 
 配置预览接口会对 cookies / 证件号等字段脱敏。
 

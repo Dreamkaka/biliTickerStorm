@@ -312,9 +312,25 @@ func (s *Server) handleTaskSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parts[0] == "reload" && r.Method == http.MethodPost {
-		n, err := s.master.ReloadTasksFromDir()
+		// 兼容旧行为：无 body 时整目录未入队文件全部入队
+		// 推荐：{"names":["a","b"]} 只入队所选
+		var body struct {
+			Names []string `json:"names"`
+			All   bool     `json:"all"`
+		}
+		_ = readJSON(r, &body)
+		var n int
+		var err error
+		if len(body.Names) > 0 {
+			n, err = s.master.EnqueueConfigFiles(body.Names)
+		} else if body.All {
+			n, err = s.master.ReloadTasksFromDir()
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请选择要入队的配置（body.names），或 all=true 整目录入队"})
+			return
+		}
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"added": n})
@@ -688,7 +704,23 @@ func (s *Server) handleGenerateConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// 直接写盘，避免 map 重排字段
+	// 默认只写 CONFIG_PATH，不入队；start_task=true 时才创建 Pending 任务
+	if !body.StartTask {
+		name, path, err := s.master.WriteTaskConfigFile(fileBase, raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"name":       name,
+			"path":       path,
+			"detail":     cfg.Detail,
+			"sale_start": cfg.SaleStart,
+			"start_task": false,
+			"queued":     false,
+		})
+		return
+	}
 	task, err := s.master.AddTaskFromJSONBytes(fileBase, raw, true)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -700,7 +732,8 @@ func (s *Server) handleGenerateConfig(w http.ResponseWriter, r *http.Request) {
 		"path":       task.TaskName + ".json",
 		"detail":     cfg.Detail,
 		"sale_start": cfg.SaleStart,
-		"start_task": body.StartTask,
+		"start_task": true,
+		"queued":     true,
 	})
 }
 
